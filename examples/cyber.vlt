@@ -1,0 +1,156 @@
+-- Volta — cyber toolkit demo
+-- volta cyber.vlt
+
+-- ── XOR cipher ──────────────────────────────────────────────
+fn xor_cipher(text: str, key: i64) -> str
+  return xor_str(text, key)
+end
+
+-- ── Caesar cipher ───────────────────────────────────────────
+fn encode_caesar(text: str, shift: i64) -> str
+  return caesar(text, shift)
+end
+
+-- ── Check if string looks like base64 ───────────────────────
+fn looks_like_base64(s: str) -> bool
+  let len = str_len(s)
+  if len % 4 != 0 do return false end
+  let i: i64 = 0
+  while i < len do
+    let c = char_at(s, i)
+    let ok = (c >= 65 and c <= 90) or  -- A-Z
+             (c >= 97 and c <= 122) or -- a-z
+             (c >= 48 and c <= 57) or  -- 0-9
+             c == 43 or c == 47 or c == 61 -- + / =
+    if not ok do return false end
+    i += 1
+  end
+  return true
+end
+
+-- ── Hex encode a string ─────────────────────────────────────
+fn str_to_hex(s: str) -> str
+  let result: str = ""
+  let i: i64 = 0
+  let len = str_len(s)
+  while i < len do
+    let b = char_at(s, i)
+    result = result .. hex(b) .. " "
+    i += 1
+  end
+  return result
+end
+
+-- ── Count character frequency ────────────────────────────────
+fn char_freq(s: str, c: i64) -> i64
+  let count: i64 = 0
+  let i: i64 = 0
+  let len = str_len(s)
+  while i < len do
+    if char_at(s, i) == c do
+      count += 1
+    end
+    i += 1
+  end
+  return count
+end
+
+-- ── Simple checksum ──────────────────────────────────────────
+fn checksum(s: str) -> i64
+  let sum: i64 = 0
+  let i: i64 = 0
+  let len = str_len(s)
+  while i < len do
+    sum += char_at(s, i)
+    i += 1
+  end
+  return sum
+end
+
+-- ── Banner ───────────────────────────────────────────────────
+fn banner(title: str)
+  print("╔══════════════════════════════════╗")
+  print("║  " .. title)
+  print("╚══════════════════════════════════╝")
+end
+
+-- ── Main ─────────────────────────────────────────────────────
+
+banner("Volta Cyber Toolkit v0.1")
+print("")
+
+-- XOR demo
+print("[*] XOR Cipher")
+let plaintext: str = "Hello, Hacker!"
+let key: i64 = 0x42
+let ciphertext = xor_cipher(plaintext, key)
+let decrypted  = xor_cipher(ciphertext, key)
+print("    Plain:     " .. plaintext)
+print("    Key:       " .. hex(key))
+print("    Encrypted: " .. str_to_hex(ciphertext))
+print("    Decrypted: " .. decrypted)
+print("")
+
+-- Caesar cipher demo
+print("[*] Caesar Cipher")
+let msg: str = "attack at dawn"
+let shifted = encode_caesar(msg, 13)
+let unshifted = encode_caesar(shifted, -13)
+print("    Original:  " .. msg)
+print("    ROT13:     " .. shifted)
+print("    Decoded:   " .. unshifted)
+print("")
+
+-- ROT13 via builtin
+print("[*] ROT13 builtin")
+let secret = rot13("Gur dhvpx oebja sbk")
+print("    Decoded: " .. secret)
+print("")
+
+-- Hash demo
+print("[*] String Hashing (djb2)")
+let samples = "password"
+print("    hash(\"password\") = " .. int_to_str(hash_str("password")))
+print("    hash(\"passw0rd\") = " .. int_to_str(hash_str("passw0rd")))
+print("    hash(\"PASSWORD\") = " .. int_to_str(hash_str("PASSWORD")))
+print("")
+
+-- Entropy analysis
+print("[*] Shannon Entropy")
+let low_entropy  = "aaaaaaaaaaaaaaaa"
+let mid_entropy  = "Hello, World!!!!"
+let high_entropy = "x9K#mP2$vL8@nQ5!"
+print("    Low  (all 'a'):  " .. float_to_str(entropy(low_entropy)))
+print("    Mid  (English):  " .. float_to_str(entropy(mid_entropy)))
+print("    High (random):   " .. float_to_str(entropy(high_entropy)))
+print("    (packed malware typically > 7.0)")
+print("")
+
+-- Byte-level string ops
+print("[*] Byte Analysis")
+let target = "GET /admin HTTP/1.1"
+print("    String: " .. target)
+print("    Length: " .. int_to_str(str_len(target)))
+print("    Checksum: " .. hex(checksum(target)))
+print("    First byte: " .. hex(char_at(target, 0)))
+print("    Slice [4..9]: " .. str_slice(target, 4, 5))
+print("    Find '/': " .. int_to_str(str_find(target, "/")))
+print("")
+
+-- Base64 detection heuristic
+print("[*] Base64 Detection")
+let maybe_b64_yes = "SGVsbG8gV29ybGQ="
+let maybe_b64_no  = "Hello World!"
+print("    \"" .. maybe_b64_yes .. "\" -> " .. bool_to_str(looks_like_base64(maybe_b64_yes)))
+print("    \"" .. maybe_b64_no  .. "\" -> " .. bool_to_str(looks_like_base64(maybe_b64_no)))
+print("")
+
+-- Command line args
+print("[*] Command line args: " .. int_to_str(arg_count()))
+if arg_count() > 1 do
+  print("    arg[1] = " .. arg_get(1))
+end
+
+print("")
+print("[+] Volta: compiled to native, zero runtime, C interop.")
+print("[+] github.com/you/volta")

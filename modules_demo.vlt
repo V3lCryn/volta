@@ -1,0 +1,35 @@
+import "lib/math"
+import "lib/strings"
+import "lib/crypto"
+
+print("=== Math module ===")
+print("is_prime(97) = " .. bool_to_str(is_prime(97)))
+print("fibonacci(10) = " .. int_to_str(fibonacci(10)))
+print("gcd(48, 18) = " .. int_to_str(gcd(48, 18)))
+print("clamp(150, 0, 100) = " .. int_to_str(clamp(150, 0, 100)))
+
+print("=== Strings module ===")
+let msg = "Hello, Volta!"
+print("upper: " .. str_upper(msg))
+print("lower: " .. str_lower(msg))
+print("reversed: " .. str_reverse(msg))
+print("repeated: " .. str_repeat("ha", 3))
+print("padded: " .. str_pad_left("42", 6, "0"))
+print("starts_with Hello: " .. bool_to_str(str_starts_with(msg, "Hello")))
+print("ends_with Volta!: " .. bool_to_str(str_ends_with(msg, "Volta!")))
+
+print("=== Crypto module ===")
+let payload = "attack at dawn"
+let key = "secret"
+let enc = xor_encrypt(payload, key)
+let dec = xor_encrypt(enc, key)
+print("original:  " .. payload)
+print("encrypted: " .. str_to_hex_str(enc))
+print("decrypted: " .. dec)
+print("entropy:   " .. float_to_str(entropy(payload)))
+print("looks encrypted: " .. bool_to_str(looks_encrypted(payload)))
+
+let b64 = "SGVsbG8gV29ybGQ="
+let not_b64 = "attack at dawn"
+print("base64 check on b64 string: " .. bool_to_str(looks_base64(b64)))
+print("base64 check on plain text: " .. bool_to_str(looks_base64(not_b64)))

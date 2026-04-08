@@ -1,0 +1,104 @@
+-- volta/lib/crypto.vlt
+-- Basic crypto utilities for security work
+
+fn xor_encrypt(text: str, key: str) -> str
+  let result: str = ""
+  let tlen = str_len(text)
+  let klen = str_len(key)
+  let i: i64 = 0
+  while i < tlen do
+    let tc = char_at(text, i)
+    let kc = char_at(key, i % klen)
+    result = result .. char_from(tc ^ kc)
+    i += 1
+  end
+  return result
+end
+
+fn str_to_hex_str(s: str) -> str
+  let result: str = ""
+  let i: i64 = 0
+  let len = str_len(s)
+  while i < len do
+    let b = char_at(s, i)
+    let hi = (b >> 4) & 0x0F
+    let lo = b & 0x0F
+    let h1: str = ""
+    let h2: str = ""
+    if hi < 10 do
+      h1 = int_to_str(hi)
+    elseif hi == 10 do h1 = "a"
+    elseif hi == 11 do h1 = "b"
+    elseif hi == 12 do h1 = "c"
+    elseif hi == 13 do h1 = "d"
+    elseif hi == 14 do h1 = "e"
+    else h1 = "f"
+    end
+    if lo < 10 do
+      h2 = int_to_str(lo)
+    elseif lo == 10 do h2 = "a"
+    elseif lo == 11 do h2 = "b"
+    elseif lo == 12 do h2 = "c"
+    elseif lo == 13 do h2 = "d"
+    elseif lo == 14 do h2 = "e"
+    else h2 = "f"
+    end
+    result = result .. h1 .. h2 .. " "
+    i += 1
+  end
+  return result
+end
+
+fn count_printable(s: str) -> i64
+  let count: i64 = 0
+  let i: i64 = 0
+  let len = str_len(s)
+  while i < len do
+    if is_printable(char_at(s, i)) do
+      count += 1
+    end
+    i += 1
+  end
+  return count
+end
+
+fn looks_encrypted(s: str) -> bool
+  return entropy(s) > 7.0
+end
+
+fn is_b64_char(c: i64) -> bool
+  if c >= 65 and c <= 90 do return true end
+  if c >= 97 and c <= 122 do return true end
+  if c >= 48 and c <= 57 do return true end
+  if c == 43 do return true end
+  if c == 47 do return true end
+  if c == 61 do return true end
+  return false
+end
+
+fn looks_base64(s: str) -> bool
+  let len = str_len(s)
+  if len < 4 do return false end
+  if len % 4 != 0 do return false end
+  let i: i64 = 0
+  while i < len do
+    if not is_b64_char(char_at(s, i)) do
+      return false
+    end
+    i += 1
+  end
+  return true
+end
+
+fn byte_frequency(s: str, byte: i64) -> i64
+  let count: i64 = 0
+  let i: i64 = 0
+  let len = str_len(s)
+  while i < len do
+    if char_at(s, i) == byte do
+      count += 1
+    end
+    i += 1
+  end
+  return count
+end
