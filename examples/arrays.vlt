@@ -1,0 +1,49 @@
+-- Arrays and smart print demo
+
+-- Smart print - no int_to_str needed
+let x = 42
+let f = 3.14
+let b = true
+let s = "hello"
+
+print("=== Smart print ===")
+print(x)
+print(f)
+print(b)
+print(s)
+print(x + 10)
+
+-- Arrays
+print("=== Arrays ===")
+let nums = [10, 20, 30, 40, 50]
+print("length: " .. int_to_str(arr_len(nums)))
+print("nums[0] = " .. int_to_str(nums[0]))
+print("nums[4] = " .. int_to_str(nums[4]))
+
+-- Modify
+nums[2] = 99
+print("after nums[2] = 99: " .. int_to_str(nums[2]))
+
+-- Iterate
+print("all values:")
+for i in 0..arr_len(nums) do
+  print("  [" .. int_to_str(i) .. "] = " .. int_to_str(nums[i]))
+end
+
+-- Push
+push(nums, 60)
+push(nums, 70)
+print("after 2 pushes, length: " .. int_to_str(arr_len(nums)))
+print("nums[5] = " .. int_to_str(nums[5]))
+
+-- Build array in loop
+print("=== Build array ===")
+let squares = [0]
+let i: i64 = 1
+while i <= 5 do
+  push(squares, i * i)
+  i += 1
+end
+for i, v in squares do
+  print("{i}: {v}")
+end
