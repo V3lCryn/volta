@@ -108,6 +108,13 @@ impl Checker {
         c.fn_types.insert("sleep_ms".into(),     VType::Nil);
         c.fn_types.insert("len".into(),          VType::Int);
         c.fn_types.insert("str".into(),          VType::Str);
+        c.fn_types.insert("arr_len".into(),      VType::Int);
+        c.fn_types.insert("push".into(),         VType::Nil);
+        c.fn_types.insert("pop".into(),          VType::Int);
+        c.fn_types.insert("hex_dump".into(),     VType::Nil);
+        c.fn_types.insert("xor_bytes".into(),    VType::Nil);
+        c.fn_types.insert("bytes_to_hex".into(), VType::Str);
+        c.fn_types.insert("str_to_hex".into(),   VType::Str);
         c
     }
 

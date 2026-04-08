@@ -152,10 +152,13 @@ impl Emitter {
         self.line("static double  ffloor(double n){return floor(n);}");
         self.line("static double  fceil(double n){return ceil(n);}");
         // array helpers (dynamic arrays via malloc)
-        self.line("typedef struct{void*data;int64_t len;int64_t cap;int64_t elem;}VArray;");
-        self.line("static VArray _arr_new(int64_t elem){VArray a;a.data=malloc(8*elem);a.len=0;a.cap=8;a.elem=elem;return a;}");
-        self.line("static void _arr_push(VArray*a,void*v){if(a->len>=a->cap){a->cap*=2;a->data=realloc(a->data,a->cap*a->elem);}memcpy((char*)a->data+a->len*a->elem,v,a->elem);a->len++;}");
-        self.line("static int64_t arr_len(VArray a){return a.len;}");
+        self.line(r#"typedef struct{int64_t*data;int64_t len;int64_t cap;}VArray;"#);
+        self.line(r#"static VArray _arr_new(int64_t cap){VArray a;a.data=(int64_t*)malloc(cap*sizeof(int64_t));a.len=0;a.cap=cap<8?8:cap;return a;}"#);
+        self.line(r#"static void _arr_push(VArray*a,int64_t v){if(a->len>=a->cap){a->cap*=2;a->data=(int64_t*)realloc(a->data,a->cap*sizeof(int64_t));}a->data[a->len++]=v;}"#);
+        self.line(r#"static int64_t _arr_pop(VArray*a){return a->len>0?a->data[--a->len]:0;}"#);
+        self.line(r#"static int64_t _arr_get(VArray*a,int64_t i){return(i>=0&&i<a->len)?a->data[i]:0;}"#);
+        self.line(r#"static void _arr_set(VArray*a,int64_t i,int64_t v){if(i>=0&&i<a->len)a->data[i]=v;}"#);
+        self.line(r#"static int64_t arr_len(VArray a){return a.len;}"#);
         // ── Cyber / low-level builtins ──────────────────────────────
         self.line(r#"static const char* hex(int64_t n){char*d=_vbuf+_vpos;int k=snprintf(d,32,"0x%llx",(unsigned long long)n);_vpos=(_vpos+k+1)%131072;return d;}"#);
         self.line(r#"static void hex_dump(const void* ptr, int64_t len){"#);
@@ -371,17 +374,11 @@ impl Emitter {
 
                 // Special case: array literal → VArray
                 if let Expr::Array(elems) = value {
-                    if elems.is_empty() {
-                        self.iline(&format!("VArray {} = _arr_new(sizeof(int64_t));", name));
-                    } else {
-                        let elem_ty = self.infer_type(&elems[0]);
-                        self.iline(&format!("VArray {} = _arr_new(sizeof({}));", name, elem_ty));
-                        for el in elems {
-                            let v = self.emit_expr(el);
-                            let tmp = self.tmp();
-                            self.iline(&format!("{} {} = {};", elem_ty, tmp, v));
-                            self.iline(&format!("_arr_push(&{}, &{});", name, tmp));
-                        }
+                    let cap = if elems.is_empty() { 8 } else { elems.len().max(8) };
+                    self.iline(&format!("VArray {} = _arr_new({});", name, cap));
+                    for el in elems {
+                        let v = self.emit_expr(el);
+                        self.iline(&format!("_arr_push(&{}, {});", name, v));
                     }
                     return;
                 }
@@ -394,10 +391,9 @@ impl Emitter {
                 let val = self.emit_expr(value);
                 match target {
                     AssignTarget::Ident(n)       => self.iline(&format!("{} = {};", n, val)),
-                    AssignTarget::Index(n, idx)  => {
+                    AssignTarget::Index(n, idx) => {
                         let i = self.emit_expr(idx);
-                        // Check if it's a VArray
-                        self.iline(&format!("((int64_t*){}.data)[{}] = {};", n, i, val));
+                        self.iline(&format!("_arr_set(&{}, {}, {});", n, i, val));
                     }
                     AssignTarget::Field(obj, fld) => {
                         let o = self.emit_expr(obj);
@@ -445,14 +441,13 @@ impl Emitter {
                         self.iline(&format!("for (int64_t {v}={s}; {v}{op}{e}; {v}++) {{", v=var, s=s, op=op, e=e));
                     }
                     Expr::Ident(arr_name) => {
-                        // for x in array — iterate VArray elements
                         let tmp = self.tmp();
+                        self.var_types.insert(var.clone(), "i64".into());
                         self.iline(&format!("for (int64_t {tmp}=0; {tmp}<{arr}.len; {tmp}++) {{", tmp=tmp, arr=arr_name));
                         self.indent += 1;
-                        self.iline(&format!("int64_t {var} = ((int64_t*){arr}.data)[{tmp}];", var=var, arr=arr_name, tmp=tmp));
-                        self.indent -= 1;
-                        // we'll close after body
+                        self.iline(&format!("int64_t {var} = _arr_get(&{arr}, {tmp});", var=var, arr=arr_name, tmp=tmp));
                         for s in body { self.emit_stmt(s); }
+                        self.indent -= 1;
                         self.iline("}");
                         return;
                     }
@@ -470,7 +465,7 @@ impl Emitter {
                 let arr = self.emit_expr(iter);
                 self.iline(&format!("for (int64_t {i}=0; {i}<{arr}.len; {i}++) {{", i=idx, arr=arr));
                 self.indent += 1;
-                self.iline(&format!("int64_t {v} = ((int64_t*){arr}.data)[{i}];", v=var, arr=arr, i=idx));
+                self.iline(&format!("int64_t {v} = _arr_get(&{arr}, {i});", v=var, arr=arr, i=idx));
                 for s in body { self.emit_stmt(s); }
                 self.indent -= 1;
                 self.iline("}");
@@ -626,9 +621,22 @@ impl Emitter {
             }
 
             Expr::Call { name, args } => {
-                // Built-in print with auto-coerce
-                if name == "print" && args.len() == 1 {
-                    return format!("print({})", self.coerce_str(&args[0]));
+                // Built-in print — accepts any type, auto-converts
+                if name == "print" {
+                    if args.is_empty() {
+                        return "print(\"\")".to_string();
+                    }
+                    let parts: Vec<String> = args.iter()
+                        .map(|a| self.coerce_str(a))
+                        .collect();
+                    if parts.len() == 1 {
+                        return format!("print({})", parts[0]);
+                    }
+                    let mut joined = parts[0].clone();
+                    for p in &parts[1..] {
+                        joined = format!("_concat(_concat({}, \" \"), {})", joined, p);
+                    }
+                    return format!("print({})", joined);
                 }
                 if name == "str" && args.len() == 1 {
                     return self.coerce_str(&args[0]);
@@ -640,8 +648,11 @@ impl Emitter {
                 if name == "push" && args.len() == 2 {
                     let arr = self.emit_expr(&args[0]);
                     let val = self.emit_expr(&args[1]);
-                    let tmp = format!("_ptmp_{}", arr.replace('.', "_"));
-                    return format!("({{ int64_t {tmp}={val}; _arr_push(&{arr},&{tmp}); }})");
+                    return format!("_arr_push(&{}, {})", arr, val);
+                }
+                if name == "pop" && args.len() == 1 {
+                    let arr = self.emit_expr(&args[0]);
+                    return format!("_arr_pop(&{})", arr);
                 }
                 let a: Vec<String> = args.iter().map(|a| self.emit_expr(a)).collect();
                 format!("{}({})", Self::safe_name(name), a.join(", "))
@@ -654,11 +665,10 @@ impl Emitter {
             }
 
             Expr::Field { target, field }      => format!("{}.{}", self.emit_expr(target), field),
-            Expr::Index { target, index }      => {
+            Expr::Index { target, index } => {
                 let t = self.emit_expr(target);
                 let i = self.emit_expr(index);
-                // VArray access
-                format!("((int64_t*){}.data)[{}]", t, i)
+                format!("_arr_get(&{}, {})", t, i)
             }
         }
     }
@@ -696,9 +706,18 @@ impl Emitter {
                     _                => format!("int_to_str({})", self.emit_expr(expr)),
                 }
             }
+            Expr::BinOp { op: BinOp::Add, left, .. } => {
+                // Propagate type from left side
+                match self.infer_type(left).as_str() {
+                    "double" | "float" => format!("float_to_str({})", self.emit_expr(expr)),
+                    "const char*"      => self.emit_expr(expr),
+                    _                  => format!("int_to_str({})", self.emit_expr(expr)),
+                }
+            }
+            Expr::BinOp { .. } => {
+                format!("int_to_str({})", self.emit_expr(expr))
+            }
             _ => {
-                // For compound expressions, emit as-is and wrap in int_to_str
-                // The user can always call str() explicitly
                 let e = self.emit_expr(expr);
                 format!("int_to_str({})", e)
             }
