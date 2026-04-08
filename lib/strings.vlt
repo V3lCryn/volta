@@ -1,0 +1,100 @@
+-- volta/lib/strings.vlt
+-- String utilities
+
+fn str_starts_with(s: str, prefix: str) -> bool
+  let slen = str_len(s)
+  let plen = str_len(prefix)
+  if plen > slen do return false end
+  return str_eq(str_slice(s, 0, plen), prefix)
+end
+
+fn str_ends_with(s: str, suffix: str) -> bool
+  let slen = str_len(s)
+  let suflen = str_len(suffix)
+  if suflen > slen do return false end
+  return str_eq(str_slice(s, slen - suflen, suflen), suffix)
+end
+
+fn str_repeat(s: str, n: i64) -> str
+  let result: str = ""
+  let i: i64 = 0
+  while i < n do
+    result = result .. s
+    i += 1
+  end
+  return result
+end
+
+fn str_pad_left(s: str, width: i64, pad: str) -> str
+  let result = s
+  while str_len(result) < width do
+    result = pad .. result
+  end
+  return result
+end
+
+fn str_pad_right(s: str, width: i64, pad: str) -> str
+  let result = s
+  while str_len(result) < width do
+    result = result .. pad
+  end
+  return result
+end
+
+fn str_reverse(s: str) -> str
+  let result: str = ""
+  let i = str_len(s) - 1
+  while i >= 0 do
+    result = result .. char_from(char_at(s, i))
+    i -= 1
+  end
+  return result
+end
+
+fn str_upper(s: str) -> str
+  let result: str = ""
+  let i: i64 = 0
+  let len = str_len(s)
+  while i < len do
+    let c = char_at(s, i)
+    if c >= 97 and c <= 122 do
+      result = result .. char_from(c - 32)
+    else
+      result = result .. char_from(c)
+    end
+    i += 1
+  end
+  return result
+end
+
+fn str_lower(s: str) -> str
+  let result: str = ""
+  let i: i64 = 0
+  let len = str_len(s)
+  while i < len do
+    let c = char_at(s, i)
+    if c >= 65 and c <= 90 do
+      result = result .. char_from(c + 32)
+    else
+      result = result .. char_from(c)
+    end
+    i += 1
+  end
+  return result
+end
+
+fn str_count(s: str, sub: str) -> i64
+  let count: i64 = 0
+  let i: i64 = 0
+  let slen = str_len(s)
+  let sublen = str_len(sub)
+  while i <= slen - sublen do
+    if str_eq(str_slice(s, i, sublen), sub) do
+      count += 1
+      i += sublen
+    else
+      i += 1
+    end
+  end
+  return count
+end

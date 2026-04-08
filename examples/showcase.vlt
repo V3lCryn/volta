@@ -1,0 +1,121 @@
+-- Volta full showcase
+
+struct Point
+  x: i64
+  y: i64
+end
+
+fn point_str(p: Point) -> str
+  return "(" .. int_to_str(p.x) .. ", " .. int_to_str(p.y) .. ")"
+end
+
+fn factorial(n: i64) -> i64
+  if n <= 1 do return 1 end
+  return n * factorial(n - 1)
+end
+
+fn fibonacci(n: i64) -> i64
+  if n <= 1 do return n end
+  return fibonacci(n - 1) + fibonacci(n - 2)
+end
+
+fn is_prime(n: i64) -> bool
+  if n < 2 do return false end
+  let i: i64 = 2
+  while i * i <= n do
+    if n % i == 0 do return false end
+    i += 1
+  end
+  return true
+end
+
+fn sum_to(n: i64) -> i64
+  let total: i64 = 0
+  for i in 1..=n do
+    total += i
+  end
+  return total
+end
+
+-- ── Math ────────────────────────────────────────────────────
+print("=== Math ===")
+print("10!       = " .. int_to_str(factorial(10)))
+print("fib(12)   = " .. int_to_str(fibonacci(12)))
+print("sum(1..100) = " .. int_to_str(sum_to(100)))
+
+-- ── Ranges ──────────────────────────────────────────────────
+print("=== Range for loops ===")
+let line: str = ""
+for i in 0..8 do
+  line = line .. int_to_str(i) .. " "
+end
+print(line)
+
+-- inclusive range
+let line2: str = ""
+for i in 1..=5 do
+  line2 = line2 .. int_to_str(i * i) .. " "
+end
+print(line2)
+
+-- ── Primes ──────────────────────────────────────────────────
+print("=== Primes under 50 ===")
+let primes: str = ""
+for n in 2..50 do
+  if is_prime(n) do
+    primes = primes .. int_to_str(n) .. " "
+  end
+end
+print(primes)
+
+-- ── Structs ─────────────────────────────────────────────────
+print("=== Structs ===")
+let a = Point { x: 3, y: 4 }
+let b = Point { x: 10, y: -2 }
+print("a = " .. point_str(a))
+print("b = " .. point_str(b))
+
+-- field mutation
+a.x = 99
+print("a.x mutated: " .. point_str(a))
+
+-- ── Casts ───────────────────────────────────────────────────
+print("=== Type casts ===")
+let n: i64 = 7
+let f = n as f64
+let half = f / 2.0
+print("7 / 2.0 = " .. float_to_str(half))
+
+-- ── Bitwise ops ─────────────────────────────────────────────
+print("=== Bitwise ===")
+let flags: i64 = 0xFF
+let mask: i64 = 0x0F
+let lo = flags & mask
+let hi = (flags >> 4) & mask
+print("0xFF lo nibble = " .. int_to_str(lo))
+print("0xFF hi nibble = " .. int_to_str(hi))
+
+-- ── Strings ─────────────────────────────────────────────────
+print("=== Strings ===")
+let greeting = "Hello"
+let target   = "Volta"
+let msg = greeting .. ", " .. target .. "!"
+print(msg)
+print("length = " .. int_to_str(str_len(msg)))
+print("contains 'Volta' = " .. bool_to_str(str_contains(msg, "Volta")))
+
+-- ── FizzBuzz ────────────────────────────────────────────────
+print("=== FizzBuzz 1-20 ===")
+for i in 1..=20 do
+  if i % 15 == 0 do
+    print("FizzBuzz")
+  elseif i % 3 == 0 do
+    print("Fizz")
+  elseif i % 5 == 0 do
+    print("Buzz")
+  else
+    print(int_to_str(i))
+  end
+end
+
+print("Done!")

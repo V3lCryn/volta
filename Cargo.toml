@@ -1,0 +1,12 @@
+[package]
+name = "volta"
+version = "0.2.0"
+edition = "2021"
+description = "The Volta programming language compiler"
+
+[[bin]]
+name = "volta"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 3
