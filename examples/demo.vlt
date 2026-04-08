@@ -1,0 +1,132 @@
+-- Volta language demo
+-- github.com/V3lCryn/volta
+
+import "lib/math"
+import "lib/strings"
+import "lib/crypto"
+
+fn banner(title: str)
+  let line = str_repeat("-", 40)
+  print(line)
+  print("  " .. title)
+  print(line)
+end
+
+fn fizzbuzz(n: i64)
+  for i in 1..=n do
+    if i % 15 == 0 do
+      print("FizzBuzz")
+    elseif i % 3 == 0 do
+      print("Fizz")
+    elseif i % 5 == 0 do
+      print("Buzz")
+    else
+      print(i)
+    end
+  end
+end
+
+fn is_perfect(n: i64) -> bool
+  let sum: i64 = 0
+  for i in 1..n do
+    if n % i == 0 do
+      sum += i
+    end
+  end
+  return sum == n
+end
+
+-- -? Run ??????????????????????????????????????????????????????
+
+banner("Volta v0.2.0")
+print("")
+
+-- Smart print ? no type conversion needed
+banner("Types")
+let name: str  = "Volta"
+let version    = 2
+let pi         = 3.14159
+let fast: bool = true
+print("name    = {name}")
+print("version = {version}")
+print("pi      = " .. float_to_str(pi))
+print("fast    = " .. bool_to_str(fast))
+print("")
+
+-- Math
+banner("Math")
+print("factorial(12) = {factorial(12)}")
+print("fibonacci(15) = {fibonacci(15)}")
+print("is_prime(97)  = " .. bool_to_str(is_prime(97)))
+print("gcd(48, 18)   = {gcd(48, 18)}")
+
+let n: i64 = 1
+let perfect_str: str = ""
+while n <= 1000 do
+  if is_perfect(n) do
+    perfect_str = perfect_str .. int_to_str(n) .. " "
+  end
+  n += 1
+end
+print("perfect <= 1000: {perfect_str}")
+print("")
+
+-- Strings
+banner("Strings")
+let msg = "Hello from Volta!"
+print("original:  {msg}")
+print("upper:     {str_upper(msg)}")
+print("reversed:  {str_reverse(msg)}")
+print("length:    {str_len(msg)}")
+print("")
+
+-- Arrays
+banner("Arrays")
+let primes = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29]
+print("first 10 primes:")
+let pstr: str = ""
+for p in primes do
+  pstr = pstr .. int_to_str(p) .. " "
+end
+print(pstr)
+
+let squares = [0]
+for i in 1..=8 do
+  push(squares, i * i)
+end
+print("squares 1-8:")
+let sstr: str = ""
+for i, v in squares do
+  if i > 0 do
+    sstr = sstr .. int_to_str(v) .. " "
+  end
+end
+print(sstr)
+print("")
+
+-- Crypto
+banner("Security")
+let payload = "attack at dawn"
+let key: i64 = 0x4B
+let enc = xor_str(payload, key)
+let dec = xor_str(enc, key)
+print("xor encrypt/decrypt:")
+print("  plain:     {payload}")
+print("  key:       {hex(key)}")
+print("  encrypted: {str_to_hex_str(enc)}")
+print("  decrypted: " .. dec)
+print("")
+print("entropy analysis:")
+let low  = "aaaaaaaaaaaaaaaa"
+let high = "x9K#mP2$vL8@nQ5!"
+print("  low entropy:  " .. float_to_str(entropy(low)))
+print("  high entropy: " .. float_to_str(entropy(high)))
+print("  (packed malware is typically > 7.0)")
+print("")
+
+-- FizzBuzz
+banner("FizzBuzz 1-20")
+fizzbuzz(20)
+print("")
+
+print("Built with Volta -- github.com/V3lCryn/volta")
