@@ -127,7 +127,7 @@ impl Emitter {
         // int_to_str
         self.line("static const char* int_to_str(int64_t n){char*d=_vbuf+_vpos;int k=snprintf(d,32,\"%lld\",(long long)n);_vpos=(_vpos+k+1)%131072;return d;}");
         // float_to_str
-        self.line("static const char* float_to_str(double n){char*d=_vbuf+_vpos;int k=snprintf(d,32,\"%g\",n);_vpos=(_vpos+k+1)%131072;return d;}");
+        self.line(r#"static const char* float_to_str(double n){char*d=_vbuf+_vpos;int k;if(n==(double)(int64_t)n)k=snprintf(d,32,"%.1f",n);else k=snprintf(d,32,"%g",n);_vpos=(_vpos+k+1)%131072;return d;}"#);
         // bool_to_str
         self.line("static const char* bool_to_str(bool b){return b?\"true\":\"false\";}");
         // str_len
@@ -152,13 +152,19 @@ impl Emitter {
         self.line("static double  ffloor(double n){return floor(n);}");
         self.line("static double  fceil(double n){return ceil(n);}");
         // array helpers (dynamic arrays via malloc)
-        self.line(r#"typedef struct{int64_t*data;int64_t len;int64_t cap;}VArray;"#);
-        self.line(r#"static VArray _arr_new(int64_t cap){VArray a;a.data=(int64_t*)malloc(cap*sizeof(int64_t));a.len=0;a.cap=cap<8?8:cap;return a;}"#);
-        self.line(r#"static void _arr_push(VArray*a,int64_t v){if(a->len>=a->cap){a->cap*=2;a->data=(int64_t*)realloc(a->data,a->cap*sizeof(int64_t));}a->data[a->len++]=v;}"#);
-        self.line(r#"static int64_t _arr_pop(VArray*a){return a->len>0?a->data[--a->len]:0;}"#);
-        self.line(r#"static int64_t _arr_get(VArray*a,int64_t i){return(i>=0&&i<a->len)?a->data[i]:0;}"#);
-        self.line(r#"static void _arr_set(VArray*a,int64_t i,int64_t v){if(i>=0&&i<a->len)a->data[i]=v;}"#);
+        self.line(r#"typedef struct{void**data;int64_t len;int64_t cap;}VArray;"#);
+        self.line(r#"static VArray _arr_new(int64_t cap){VArray a;cap=cap<8?8:cap;a.data=(void**)malloc(cap*sizeof(void*));a.len=0;a.cap=cap;return a;}"#);
+        self.line(r#"static void _arr_push(VArray*a,void*v){if(a->len>=a->cap){a->cap*=2;a->data=(void**)realloc(a->data,a->cap*sizeof(void*));}a->data[a->len++]=v;}"#);
+        self.line(r#"static void* _arr_pop(VArray*a){return a->len>0?a->data[--a->len]:NULL;}"#);
+        self.line(r#"static void* _arr_get(VArray*a,int64_t i){return(i>=0&&i<a->len)?a->data[i]:NULL;}"#);
+        self.line(r#"static void _arr_set(VArray*a,int64_t i,void*v){if(i>=0&&i<a->len)a->data[i]=v;}"#);
         self.line(r#"static int64_t arr_len(VArray a){return a.len;}"#);
+        self.line(r#"#define AGET_INT(a,i) ((int64_t)(intptr_t)_arr_get(&(a),(i)))"#);
+        self.line(r#"#define AGET_STR(a,i) ((const char*)_arr_get(&(a),(i)))"#);
+        self.line(r#"#define ASET_INT(a,i,v) _arr_set(&(a),(i),(void*)(intptr_t)(v))"#);
+        self.line(r#"#define ASET_STR(a,i,v) _arr_set(&(a),(i),(void*)(v))"#);
+        self.line(r#"#define APUSH_INT(a,v) _arr_push(&(a),(void*)(intptr_t)(v))"#);
+        self.line(r#"#define APUSH_STR(a,v) _arr_push(&(a),(void*)(v))"#);
         // ── Cyber / low-level builtins ──────────────────────────────
         self.line(r#"static const char* hex(int64_t n){char*d=_vbuf+_vpos;int k=snprintf(d,32,"0x%llx",(unsigned long long)n);_vpos=(_vpos+k+1)%131072;return d;}"#);
         self.line(r#"static void hex_dump(const void* ptr, int64_t len){"#);
@@ -378,7 +384,12 @@ impl Emitter {
                     self.iline(&format!("VArray {} = _arr_new({});", name, cap));
                     for el in elems {
                         let v = self.emit_expr(el);
-                        self.iline(&format!("_arr_push(&{}, {});", name, v));
+                        let elem_ty = self.infer_type(el);
+                        if elem_ty == "const char*" {
+                            self.iline(&format!("APUSH_STR({}, {});", name, v));
+                        } else {
+                            self.iline(&format!("APUSH_INT({}, {});", name, v));
+                        }
                     }
                     return;
                 }
@@ -393,7 +404,7 @@ impl Emitter {
                     AssignTarget::Ident(n)       => self.iline(&format!("{} = {};", n, val)),
                     AssignTarget::Index(n, idx) => {
                         let i = self.emit_expr(idx);
-                        self.iline(&format!("_arr_set(&{}, {}, {});", n, i, val));
+                        self.iline(&format!("ASET_INT({}, {}, {});", n, i, val));
                     }
                     AssignTarget::Field(obj, fld) => {
                         let o = self.emit_expr(obj);
@@ -445,7 +456,7 @@ impl Emitter {
                         self.var_types.insert(var.clone(), "i64".into());
                         self.iline(&format!("for (int64_t {tmp}=0; {tmp}<{arr}.len; {tmp}++) {{", tmp=tmp, arr=arr_name));
                         self.indent += 1;
-                        self.iline(&format!("int64_t {var} = _arr_get(&{arr}, {tmp});", var=var, arr=arr_name, tmp=tmp));
+                        self.iline(&format!("int64_t {var} = AGET_INT({arr}, {tmp});", var=var, arr=arr_name, tmp=tmp));
                         for s in body { self.emit_stmt(s); }
                         self.indent -= 1;
                         self.iline("}");
@@ -465,7 +476,7 @@ impl Emitter {
                 let arr = self.emit_expr(iter);
                 self.iline(&format!("for (int64_t {i}=0; {i}<{arr}.len; {i}++) {{", i=idx, arr=arr));
                 self.indent += 1;
-                self.iline(&format!("int64_t {v} = _arr_get(&{arr}, {i});", v=var, arr=arr, i=idx));
+                self.iline(&format!("int64_t {v} = AGET_INT({arr}, {i});", v=var, arr=arr, i=idx));
                 for s in body { self.emit_stmt(s); }
                 self.indent -= 1;
                 self.iline("}");
@@ -497,26 +508,41 @@ impl Emitter {
                 if expr_src.is_empty() {
                     parts.push("\"\"".to_string());
                 } else {
-                    // Check if it's a known string variable or str-returning call
-                    let is_str = self.var_types.get(&expr_src)
-                        .map(|t| t == "str")
-                        .unwrap_or(false)
-                        || self.fn_types.get(&expr_src)
-                        .map(|t| t == "const char*")
-                        .unwrap_or(false)
+                    // Determine the type of the interpolated expression
+                    let is_str = self.var_types.get(&expr_src).map(|t| t == "str").unwrap_or(false)
                         || expr_src.starts_with('"');
-                    if is_str {
+                    // Check if it's a known str-returning function call like str_upper(x)
+                    let func_name = expr_src.split('(').next().unwrap_or("").trim();
+                    const STR_FNS: &[&str] = &[
+                        "int_to_str","float_to_str","bool_to_str","str_upper","str_lower",
+                        "str_reverse","str_repeat","str_slice","str_replace","char_from",
+                        "rot13","caesar","xor_str","hex","bytes_to_hex","str_to_hex_str",
+                        "arg_get","input","xor_encrypt","str_to_hex",
+                    ];
+                    const BOOL_FNS: &[&str] = &[
+                        "is_prime","is_even","is_odd","looks_base64","looks_encrypted",
+                        "is_b64_char","str_eq","str_contains","str_ends_with","str_starts_with",
+                        "is_printable","is_alpha","is_digit_char",
+                    ];
+                    const FLOAT_FNS: &[&str] = &[
+                        "entropy","fsqrt","ffloor","fceil","float_to_str","to_float",
+                    ];
+                    let is_str_fn = STR_FNS.contains(&func_name)
+                        || self.fn_types.get(func_name).map(|t| t == "const char*").unwrap_or(false);
+                    let is_bool_fn = BOOL_FNS.contains(&func_name)
+                        || self.fn_types.get(func_name).map(|t| t == "bool").unwrap_or(false);
+                    let is_float_fn = FLOAT_FNS.contains(&func_name)
+                        || self.fn_types.get(func_name).map(|t| t == "double" || t == "float").unwrap_or(false);
+                    let is_bool = self.var_types.get(&expr_src).map(|t| t == "bool").unwrap_or(false) || is_bool_fn;
+                    let is_float = self.var_types.get(&expr_src).map(|t| t == "f64" || t == "f32" || t == "float").unwrap_or(false) || is_float_fn;
+                    if is_str || is_str_fn {
                         parts.push(expr_src);
+                    } else if is_bool {
+                        parts.push(format!("bool_to_str({})", expr_src));
+                    } else if is_float {
+                        parts.push(format!("float_to_str({})", expr_src));
                     } else {
-                        // Check if it looks like a float var
-                        let is_float = self.var_types.get(&expr_src)
-                            .map(|t| t == "f64" || t == "f32" || t == "float")
-                            .unwrap_or(false);
-                        if is_float {
-                            parts.push(format!("float_to_str({})", expr_src));
-                        } else {
-                            parts.push(format!("int_to_str({})", expr_src));
-                        }
+                        parts.push(format!("int_to_str({})", expr_src));
                     }
                 }
             } else {
@@ -648,11 +674,15 @@ impl Emitter {
                 if name == "push" && args.len() == 2 {
                     let arr = self.emit_expr(&args[0]);
                     let val = self.emit_expr(&args[1]);
-                    return format!("_arr_push(&{}, {})", arr, val);
+                    let vty = self.infer_type(&args[1]);
+                    if vty == "const char*" {
+                        return format!("APUSH_STR({}, {})", arr, val);
+                    }
+                    return format!("APUSH_INT({}, {})", arr, val);
                 }
                 if name == "pop" && args.len() == 1 {
                     let arr = self.emit_expr(&args[0]);
-                    return format!("_arr_pop(&{})", arr);
+                    return format!("((int64_t)(intptr_t)_arr_pop(&{}))", arr);
                 }
                 let a: Vec<String> = args.iter().map(|a| self.emit_expr(a)).collect();
                 format!("{}({})", Self::safe_name(name), a.join(", "))
@@ -668,7 +698,8 @@ impl Emitter {
             Expr::Index { target, index } => {
                 let t = self.emit_expr(target);
                 let i = self.emit_expr(index);
-                format!("_arr_get(&{}, {})", t, i)
+                // Use AGET_INT as default - caller can cast if needed
+                format!("AGET_INT({}, {})", t, i)
             }
         }
     }
@@ -682,20 +713,25 @@ impl Emitter {
             Expr::Cast { ty, .. } if ty == "f64" || ty == "f32" || ty == "float"
                                 => format!("float_to_str({})", self.emit_expr(expr)),
             Expr::Ident(name) => {
-                // Look up var type from declared type or fn return type
                 let ty = self.var_types.get(name).map(|s| s.as_str()).unwrap_or("");
                 match ty {
                     "f64"|"f32"|"float" => format!("float_to_str({})", name),
                     "bool"              => format!("bool_to_str({})", name),
                     "str"               => name.clone(),
-                    // unknown or numeric — safe to int_to_str
                     _                   => format!("int_to_str({})", name),
                 }
             }
             Expr::BinOp { op: BinOp::Concat, .. } => self.emit_expr(expr), // already a string
             Expr::Call { name, .. } => {
-                // Already a str-returning builtin — don't double-wrap
-                if matches!(name.as_str(), "int_to_str"|"float_to_str"|"bool_to_str"|"str_len") {
+                // Already returns a string — pass through
+                const STR_BUILTINS: &[&str] = &[
+                    "int_to_str","float_to_str","bool_to_str","str_upper","str_lower",
+                    "str_reverse","str_repeat","str_pad_left","str_pad_right","str_slice",
+                    "str_replace","char_from","rot13","caesar","xor_str","hex",
+                    "bytes_to_hex","str_to_hex_str","arg_get","input","xor_encrypt",
+                    "str_to_hex","greet","repeat",
+                ];
+                if STR_BUILTINS.contains(&name.as_str()) {
                     return self.emit_expr(expr);
                 }
                 let ret = self.fn_types.get(name.as_str()).map(|s| s.as_str()).unwrap_or("");
