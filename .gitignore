@@ -1,5 +1,15 @@
 target/
 *.c
-hello
+arrtest
+arrtest.vlt
+test_b64
+test_b64.vlt
+modules_demo
+modules_demo.vlt
+tour
 showcase
-cyber
+showcase.vlt
+hello
+hello.c
+showcase.c
+test*.vlt
