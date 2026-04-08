@@ -1,0 +1,334 @@
+-- ╔══════════════════════════════════════════╗
+-- ║     Welcome to Volta — Language Tour     ║
+-- ║     Written in Volta, by Volta           ║
+-- ╚══════════════════════════════════════════╝
+--
+-- Run this file: volta tour.vlt
+
+import "lib/math"
+import "lib/strings"
+import "lib/crypto"
+
+-- ─────────────────────────────────────────────
+-- SECTION 1: Variables
+-- ─────────────────────────────────────────────
+
+fn section(title: str)
+  print("")
+  print("--------------------------------------------")
+  print("  " .. title)
+  print("--------------------------------------------")
+end
+
+section("1. Variables")
+
+-- Volta figures out the type automatically
+let name    = "Volta"
+let version = 2
+let pi      = 3.14159
+let fast    = true
+
+-- Or you can be explicit
+let score: i64  = 100
+let ratio: f64  = 0.75
+let flag: bool  = false
+let msg: str    = "hello"
+
+print("name    = {name}")
+print("version = {version}")
+print("pi      = " .. float_to_str(pi))
+print("score   = {score}")
+
+-- ─────────────────────────────────────────────
+-- SECTION 2: String interpolation
+-- ─────────────────────────────────────────────
+
+section("2. String interpolation")
+
+let lang    = "Volta"
+let year    = 2024
+let feeling = "amazing"
+
+-- Embed variables directly in strings with {}
+print("I built {lang} in {year} and it feels {feeling}!")
+print("Score is {score} out of 100")
+print("2 + 2 = {2 + 2}")
+
+-- Classic concat still works too
+print("Hello, " .. lang .. "!")
+
+-- ─────────────────────────────────────────────
+-- SECTION 3: Functions
+-- ─────────────────────────────────────────────
+
+section("3. Functions")
+
+fn add(a: i64, b: i64) -> i64
+  return a + b
+end
+
+fn greet(who: str) -> str
+  return "Hello, {who}! Welcome to Volta."
+end
+
+fn power_of_two(n: i64) -> bool
+  if n <= 0 do return false end
+  return n & (n - 1) == 0
+end
+
+print(greet("hacker"))
+print("add(10, 32) = {add(10, 32)}")
+print("64 is power of 2: " .. bool_to_str(power_of_two(64)))
+print("100 is power of 2: " .. bool_to_str(power_of_two(100)))
+
+-- ─────────────────────────────────────────────
+-- SECTION 4: Control flow
+-- ─────────────────────────────────────────────
+
+section("4. Control flow")
+
+-- if / elseif / else
+let temp = 72
+
+if temp > 90 do
+  print("hot")
+elseif temp > 70 do
+  print("comfortable ({temp} degrees)")
+elseif temp > 50 do
+  print("cool")
+else
+  print("cold")
+end
+
+-- while loop
+let i: i64 = 1
+let line: str = ""
+while i <= 5 do
+  line = line .. int_to_str(i * i) .. " "
+  i += 1
+end
+print("squares: {line}")
+
+-- for with range
+let sum: i64 = 0
+for n in 1..=100 do
+  sum += n
+end
+print("sum 1 to 100 = {sum}")
+
+-- for with step
+let evens: str = ""
+for n in 0..20 do
+  if n % 2 == 0 do
+    evens = evens .. int_to_str(n) .. " "
+  end
+end
+print("evens: {evens}")
+
+-- break and continue
+let found: i64 = -1
+for n in 1..100 do
+  if n * n > 500 do
+    found = n
+    break
+  end
+end
+print("first n where n^2 > 500: {found}")
+
+-- ─────────────────────────────────────────────
+-- SECTION 5: Structs
+-- ─────────────────────────────────────────────
+
+section("5. Structs")
+
+struct Point
+  x: i64
+  y: i64
+end
+
+struct Player
+  name: str
+  score: i64
+  level: i64
+end
+
+fn distance_sq(a: Point, b: Point) -> i64
+  let dx = a.x - b.x
+  let dy = a.y - b.y
+  return dx * dx + dy * dy
+end
+
+fn player_info(p: Player) -> str
+  return "Player " .. p.name .. " | Level " .. int_to_str(p.level) .. " | Score " .. int_to_str(p.score)
+end
+
+let origin = Point { x: 0, y: 0 }
+let target = Point { x: 3, y: 4 }
+print("distance squared = {distance_sq(origin, target)}")
+
+let p = Player { name: "Rasputin", score: 0, level: 1 }
+print(player_info(p))
+p.score = 9001
+p.level = 99
+print(player_info(p))
+
+-- ─────────────────────────────────────────────
+-- SECTION 6: Arrays
+-- ─────────────────────────────────────────────
+
+section("6. Arrays")
+
+let nums = [3, 1, 4, 1, 5, 9, 2, 6]
+let nlen  = arr_len(nums)
+let first = nums[0]
+let last  = nums[7]
+print("length: {nlen}")
+print("first:  {first}")
+print("last:   {last}")
+
+-- Iterate
+let total: i64 = 0
+for n in nums do
+  total += n
+end
+print("sum: {total}")
+
+-- Iterate with index
+print("contents:")
+for i, v in nums do
+  print("  [{i}] = {v}")
+end
+
+-- Build dynamically
+let fib = [0, 1]
+let fi: i64 = 2
+while fi < 10 do
+  push(fib, fib[fi - 1] + fib[fi - 2])
+  fi += 1
+end
+let fibstr: str = ""
+for n in fib do
+  fibstr = fibstr .. int_to_str(n) .. " "
+end
+print("fibonacci: {fibstr}")
+
+-- ─────────────────────────────────────────────
+-- SECTION 7: Type casting + bitwise
+-- ─────────────────────────────────────────────
+
+section("7. Types and bitwise ops")
+
+-- Cast between types
+let n: i64 = 7
+let f = n as f64
+print("7 / 2   = {n / 2}  (integer division)")
+print("7 / 2.0 = " .. float_to_str(f / 2.0) .. " (float division)")
+
+-- Bitwise
+let flags: i64 = 0xFF
+let mask: i64  = 0x0F
+print("0xFF & 0x0F  = {flags & mask}")
+print("0xFF >> 4    = {flags >> 4}")
+print("0xFF ^ 0x55  = {flags ^ 0x55}")
+print("hex(255)     = {hex(255)}")
+
+-- ─────────────────────────────────────────────
+-- SECTION 8: The stdlib
+-- ─────────────────────────────────────────────
+
+section("8. Standard library")
+
+-- math module
+print("is_prime(97)    = " .. bool_to_str(is_prime(97)))
+print("fibonacci(12)   = {fibonacci(12)}")
+print("gcd(48, 18)     = {gcd(48, 18)}")
+print("clamp(150,0,100)= {clamp(150, 0, 100)}")
+
+-- strings module
+let s = "Hello from Volta!"
+print("upper:    {str_upper(s)}")
+print("reversed: {str_reverse(s)}")
+let ha = str_repeat("ha", 4)
+print("repeated: {ha}")
+let padded = str_pad_left("42", 8, "0")
+print("padded:   {padded}")
+
+-- ─────────────────────────────────────────────
+-- SECTION 9: Crypto and security builtins
+-- ─────────────────────────────────────────────
+
+section("9. Security builtins")
+
+let payload = "attack at dawn"
+let key: i64 = 0x42
+
+-- XOR cipher
+let enc = xor_str(payload, key)
+let dec = xor_str(enc, key)
+print("xor encrypt/decrypt:")
+print("  plain:     {payload}")
+print("  key:       {hex(key)}")
+print("  encrypted: {str_to_hex_str(enc)}")
+print("  decrypted: {dec}")
+
+-- Hashing
+let h1 = hash_str("password")
+print("hash(password)  = {h1}")
+let h2 = hash_str("passw0rd")
+print("hash(passw0rd)  = {h2}")
+
+-- Entropy
+print("entropy(low):   " .. float_to_str(entropy("aaaaaaaaaa")))
+print("entropy(high):  " .. float_to_str(entropy("x9K#mP2vL8")))
+
+-- ROT13
+let secret = "Uryyb, Unpxre!"
+print("rot13 decoded: {rot13(secret)}")
+
+-- ─────────────────────────────────────────────
+-- SECTION 10: C FFI
+-- ─────────────────────────────────────────────
+
+section("10. C FFI -- calling C from Volta")
+
+-- Call any C function directly with @extern
+@extern "C" do
+  fn puts(s: str) -> i32
+  fn getenv(name: str) -> str
+end
+
+let shell = getenv("SHELL")
+let home  = getenv("HOME")
+print("SHELL = {shell}")
+print("HOME  = {home}")
+
+-- ─────────────────────────────────────────────
+-- SECTION 11: Recursion
+-- ─────────────────────────────────────────────
+
+section("11. Recursion")
+
+fn fact(n: i64) -> i64
+  if n <= 1 do return 1 end
+  return n * fact(n - 1)
+end
+
+fn fib(n: i64) -> i64
+  if n <= 1 do return n end
+  return fib(n - 1) + fib(n - 2)
+end
+
+for i in 1..=10 do
+  print("{i}! = {fact(i)}")
+end
+
+-- ─────────────────────────────────────────────
+-- DONE
+-- ─────────────────────────────────────────────
+
+print("")
+print("============================================")
+print("  End of tour. Now go build something.")
+print("  github.com/V3lCryn/volta")
+print("============================================")
+print("")

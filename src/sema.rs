@@ -132,6 +132,12 @@ impl Checker {
                         .collect();
                     self.structs.insert(s.name.clone(), fields);
                 }
+                Stmt::ExternBlock(eb) => {
+                    for f in &eb.fns {
+                        let ret = f.ret_ty.as_deref().map(VType::from_str).unwrap_or(VType::Nil);
+                        self.fn_types.insert(f.name.clone(), ret);
+                    }
+                }
                 _ => {}
             }
         }

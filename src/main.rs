@@ -53,20 +53,23 @@ fn cmd_new(args: &[String]) {
     // main.vlt
     fs::write(dir.join("main.vlt"), format!(
 r#"-- {name} — a Volta project
+-- run: volta main.vlt
 
 fn greet(who: str) -> str
   return "Hello, {{who}}!"
 end
 
-let msg = greet("World")
+let name = "{name}"
+let msg = greet(name)
 print(msg)
+print("Built with Volta -- github.com/V3lCryn/volta")
 "#, name=name)).unwrap();
 
     // lib/utils.vlt
     fs::write(dir.join("lib").join("utils.vlt"),
-r#"-- Utility functions for this project
+r#"-- utils.vlt — shared utilities for this project
 
-fn repeat(s: str, n: i64) -> str
+fn repeat_str(s: str, n: i64) -> str
   let result: str = ""
   let i: i64 = 0
   while i < n do
@@ -74,6 +77,12 @@ fn repeat(s: str, n: i64) -> str
     i += 1
   end
   return result
+end
+
+fn clamp(val: i64, lo: i64, hi: i64) -> i64
+  if val < lo do return lo end
+  if val > hi do return hi end
+  return val
 end
 "#).unwrap();
 

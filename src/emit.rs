@@ -283,12 +283,25 @@ impl Emitter {
                 }
             }
             Expr::Call { name, .. }               => {
+                // Check known str-returning builtins first
+                const STR_CALLS: &[&str] = &[
+                    "int_to_str","float_to_str","bool_to_str","str_upper","str_lower",
+                    "str_reverse","str_repeat","str_pad_left","str_pad_right","str_slice",
+                    "str_replace","char_from","rot13","caesar","xor_str","hex",
+                    "bytes_to_hex","arg_get","input","xor_encrypt","str_to_hex_str",
+                    "greet","repeat_str",
+                ];
+                if STR_CALLS.contains(&name.as_str()) {
+                    return "const char*".into();
+                }
                 self.fn_types.get(name).cloned()
                     .unwrap_or_else(|| "int64_t".into())
             }
             Expr::StructLit { name, .. }          => name.clone(),
             Expr::Array(_)                        => "VArray".into(),
-            _ => "void*".into(),
+            Expr::Field { .. }                    => "int64_t".into(), // struct fields default to int
+            Expr::Index { .. }                    => "int64_t".into(), // array elements default to int
+            _ => "int64_t".into(), // safe default for unknown
         }
     }
 
@@ -306,7 +319,7 @@ impl Emitter {
     // ── Extern ────────────────────────────────────────────────────────────────
 
     fn emit_extern_block(&mut self, eb: &ExternBlock) {
-        const SKIP: &[&str] = &["printf","puts","malloc","free","memcpy","strlen","scanf","fgets","atoi","atof","atoll","sqrt","floor","ceil","fabs"];
+        const SKIP: &[&str] = &["printf","puts","malloc","free","memcpy","strlen","scanf","fgets","atoi","atof","atoll","sqrt","floor","ceil","fabs","getenv","system","exit","putchar","getchar","fopen","fclose","fread","fwrite","rand","srand","time","abort"];
         for f in &eb.fns {
             if SKIP.contains(&f.name.as_str()) { continue; }
             let ret = self.resolve_ty(f.ret_ty.as_deref());
@@ -372,7 +385,9 @@ impl Emitter {
                             "double"      => "f64",
                             "float"       => "f32",
                             "bool"        => "bool",
-                            _             => "i64",
+                            "VArray"      => "VArray",
+                            s if s.starts_with("struct ") => s,
+                            _ => "i64",
                         };
                         self.var_types.insert(name.clone(), volta_ty.to_string());
                     }
@@ -535,14 +550,23 @@ impl Emitter {
                         || self.fn_types.get(func_name).map(|t| t == "double" || t == "float").unwrap_or(false);
                     let is_bool = self.var_types.get(&expr_src).map(|t| t == "bool").unwrap_or(false) || is_bool_fn;
                     let is_float = self.var_types.get(&expr_src).map(|t| t == "f64" || t == "f32" || t == "float").unwrap_or(false) || is_float_fn;
-                    if is_str || is_str_fn {
-                        parts.push(expr_src);
-                    } else if is_bool {
-                        parts.push(format!("bool_to_str({})", expr_src));
-                    } else if is_float {
-                        parts.push(format!("float_to_str({})", expr_src));
+                    // Handle array indexing: nums[i] -> AGET_INT(nums, i)
+                    let expr_emit = if expr_src.contains('[') && expr_src.contains(']') {
+                        let bracket = expr_src.find('[').unwrap();
+                        let arr_name = expr_src[..bracket].trim().to_string();
+                        let idx_part = expr_src[bracket+1..expr_src.rfind(']').unwrap_or(expr_src.len())].trim().to_string();
+                        format!("AGET_INT({}, {})", arr_name, idx_part)
                     } else {
-                        parts.push(format!("int_to_str({})", expr_src));
+                        expr_src.clone()
+                    };
+                    if is_str || is_str_fn {
+                        parts.push(expr_emit);
+                    } else if is_bool {
+                        parts.push(format!("bool_to_str({})", expr_emit));
+                    } else if is_float {
+                        parts.push(format!("float_to_str({})", expr_emit));
+                    } else {
+                        parts.push(format!("int_to_str({})", expr_emit));
                     }
                 }
             } else {
