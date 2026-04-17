@@ -1,0 +1,27 @@
+-- TCP client test
+
+let host = "example.com"
+let port: i64 = 80
+
+print("Connecting to " .. host .. ":" .. int_to_str(port) .. "...")
+
+let sock = tcp_connect(host, port)
+
+if not tcp_ok(sock) do
+  print("Connection failed!")
+end
+
+if tcp_ok(sock) do
+  print("Connected!")
+
+  let crlf = "\r\n"
+  let request = "GET / HTTP/1.0" .. crlf .. "Host: example.com" .. crlf .. "Connection: close" .. crlf .. crlf
+  tcp_send(sock, request)
+  print("Request sent")
+
+  let status = tcp_recv_line(sock)
+  print("Response: " .. status)
+
+  tcp_close(sock)
+  print("Done")
+end

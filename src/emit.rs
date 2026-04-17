@@ -229,6 +229,20 @@ impl Emitter {
         self.line(r#"static bool file_delete(const char* path){return remove(path)==0;}"#);
         self.line(r#"static int64_t file_size(const char* path){FILE*f=fopen(path,"r");if(!f)return -1;fseek(f,0,SEEK_END);long sz=ftell(f);fclose(f);return (int64_t)sz;}"#);
         self.line(r#"static const char* file_readline(const char* path,int64_t n){FILE*f=fopen(path,"r");if(!f)return "";char line[4096];int64_t i=0;while(i<=n&&fgets(line,sizeof(line),f)){if(i==n){fclose(f);char*d=_vbuf+_vpos;int len=strlen(line);if(len>0&&line[len-1]=='\n')line[--len]=0;memcpy(d,line,len+1);_vpos=(_vpos+len+1)%131072;return d;}i++;}fclose(f);return "";}"#);
+        self.line(r#"#include <sys/socket.h>"#);
+        self.line(r#"#include <netinet/in.h>"#);
+        self.line(r#"#include <arpa/inet.h>"#);
+        self.line(r#"#include <netdb.h>"#);
+        self.line(r#"#include <unistd.h>"#);
+        self.line(r#"static int64_t tcp_connect(const char* host,int64_t port){struct addrinfo hints={0},*res;hints.ai_family=AF_UNSPEC;hints.ai_socktype=SOCK_STREAM;char ps[16];snprintf(ps,16,"%lld",(long long)port);if(getaddrinfo(host,ps,&hints,&res)!=0)return -1;int fd=socket(res->ai_family,res->ai_socktype,res->ai_protocol);if(fd<0){freeaddrinfo(res);return -1;}if(connect(fd,res->ai_addr,res->ai_addrlen)!=0){close(fd);freeaddrinfo(res);return -1;}freeaddrinfo(res);return (int64_t)fd;}"#);
+        self.line(r#"static int64_t tcp_listen(int64_t port){int fd=socket(AF_INET,SOCK_STREAM,0);if(fd<0)return -1;int opt=1;setsockopt(fd,SOL_SOCKET,SO_REUSEADDR,&opt,sizeof(opt));struct sockaddr_in addr={0};addr.sin_family=AF_INET;addr.sin_addr.s_addr=INADDR_ANY;addr.sin_port=htons((uint16_t)port);if(bind(fd,(struct sockaddr*)&addr,sizeof(addr))<0){close(fd);return -1;}if(listen(fd,10)<0){close(fd);return -1;}return (int64_t)fd;}"#);
+        self.line(r#"static int64_t tcp_accept(int64_t sfd){struct sockaddr_in a={0};socklen_t l=sizeof(a);return (int64_t)accept((int)sfd,(struct sockaddr*)&a,&l);}"#);
+        self.line(r#"static bool tcp_send(int64_t fd,const char* data){size_t len=strlen(data);return send((int)fd,data,len,0)==(ssize_t)len;}"#);
+        self.line(r#"static const char* tcp_recv(int64_t fd){char*d=_vbuf+_vpos;int64_t total=0;char tmp[4096];ssize_t n;while((n=recv((int)fd,tmp,sizeof(tmp)-1,0))>0){if(total+n>=65000)break;memcpy(d+total,tmp,n);total+=n;}d[total]=0;_vpos=(_vpos+total+1)%131072;return d;}"#);
+        self.line(r#"static const char* tcp_recv_line(int64_t fd){char*d=_vbuf+_vpos;int64_t i=0;char c;while(recv((int)fd,&c,1,0)==1&&i<4094){if(c=='\n')break;if(c!='\r')d[i++]=c;}d[i]=0;_vpos=(_vpos+i+1)%131072;return d;}"#);
+        self.line(r#"static void tcp_close(int64_t fd){close((int)fd);}"#);
+        self.line(r#"static bool tcp_ok(int64_t fd){return fd>=0;}"#);
+        self.line(r#"static const char* tcp_peer_ip(int64_t fd){struct sockaddr_in a={0};socklen_t l=sizeof(a);getpeername((int)fd,(struct sockaddr*)&a,&l);char*d=_vbuf+_vpos;inet_ntop(AF_INET,&a.sin_addr,d,64);_vpos=(_vpos+64)%131072;return d;}"#);
         self.line("// ───────────────────────────────────────────────────────────");
         self.line("");
     }
@@ -837,7 +851,19 @@ fn size_of_ty(ty: &str) -> u64 {
 }
 
 fn escape_str(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\t', "\\t")
+    let mut r = String::new();
+    for c in s.chars() {
+        match c {
+            '\\' => r.push_str("\\\\"),
+            '"'    => r.push_str("\\\""),
+            '\n'  => r.push_str("\\n"),
+            '\r'  => r.push_str("\\r"),
+            '\t'  => r.push_str("\\t"),
+            '\0'  => r.push_str("\\0"),
+            c      => r.push(c),
+        }
+    }
+    r
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
