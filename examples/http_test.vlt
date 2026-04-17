@@ -1,0 +1,10 @@
+import "lib/http"
+
+print("=== HTTP GET ===")
+let response = http_get("http://example.com/")
+let status = http_status(response)
+let body = http_body(response)
+print("status: " .. status)
+print("body length: " .. int_to_str(str_len(body)))
+print("first 200 chars:")
+print(str_slice(body, 0, 200))
