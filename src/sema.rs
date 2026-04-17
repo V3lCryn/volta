@@ -123,6 +123,23 @@ impl Checker {
         c.fn_types.insert("file_delete".into(),   VType::Bool);
         c.fn_types.insert("file_size".into(),     VType::Int);
         c.fn_types.insert("file_readline".into(), VType::Str);
+        // TCP sockets
+        c.fn_types.insert("tcp_connect".into(),   VType::Int);
+        c.fn_types.insert("tcp_listen".into(),    VType::Int);
+        c.fn_types.insert("tcp_accept".into(),    VType::Int);
+        c.fn_types.insert("tcp_send".into(),      VType::Bool);
+        c.fn_types.insert("tcp_send_bytes".into(),VType::Bool);
+        c.fn_types.insert("tcp_recv".into(),      VType::Str);
+        c.fn_types.insert("tcp_recv_line".into(), VType::Str);
+        c.fn_types.insert("tcp_close".into(),     VType::Nil);
+        c.fn_types.insert("tcp_ok".into(),        VType::Bool);
+        c.fn_types.insert("tcp_peer_ip".into(),   VType::Str);
+        c.fn_types.insert("file_write".into(),    VType::Bool);
+        c.fn_types.insert("file_append".into(),   VType::Bool);
+        c.fn_types.insert("file_exists".into(),   VType::Bool);
+        c.fn_types.insert("file_delete".into(),   VType::Bool);
+        c.fn_types.insert("file_size".into(),     VType::Int);
+        c.fn_types.insert("file_readline".into(), VType::Str);
         c
     }
 
