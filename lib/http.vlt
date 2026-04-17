@@ -1,0 +1,106 @@
+-- lib/http.vlt — HTTP client for Volta
+
+fn _http_starts_with(s: str, prefix: str) -> bool
+  let plen = str_len(prefix)
+  let slen = str_len(s)
+  if plen > slen do return false end
+  return str_eq(str_slice(s, 0, plen), prefix)
+end
+
+fn http_host(url: str) -> str
+  let s = url
+  if _http_starts_with(s, "http://") do
+    s = str_slice(s, 7, str_len(s) - 7)
+  end
+  let i: i64 = 0
+  while i < str_len(s) do
+    if char_at(s, i) == 47 do
+      return str_slice(s, 0, i)
+    end
+    i += 1
+  end
+  return s
+end
+
+fn http_path(url: str) -> str
+  let s = url
+  if _http_starts_with(s, "http://") do
+    s = str_slice(s, 7, str_len(s) - 7)
+  end
+  let i: i64 = 0
+  while i < str_len(s) do
+    if char_at(s, i) == 47 do
+      return str_slice(s, i, str_len(s) - i)
+    end
+    i += 1
+  end
+  return "/"
+end
+
+fn http_get(url: str) -> str
+  let host = http_host(url)
+  let path = http_path(url)
+  let crlf = "\r\n"
+  let req = "GET " .. path .. " HTTP/1.0" .. crlf
+  req = req .. "Host: " .. host .. crlf
+  req = req .. "Connection: close" .. crlf
+  req = req .. crlf
+  let sock = tcp_connect(host, 80)
+  if not tcp_ok(sock) do
+    return "error: could not connect to " .. host
+  end
+  tcp_send(sock, req)
+  let response = tcp_recv(sock)
+  tcp_close(sock)
+  return response
+end
+
+fn http_post(url: str, body: str) -> str
+  let host = http_host(url)
+  let path = http_path(url)
+  let crlf = "\r\n"
+  let req = "POST " .. path .. " HTTP/1.0" .. crlf
+  req = req .. "Host: " .. host .. crlf
+  req = req .. "Content-Type: application/json" .. crlf
+  req = req .. "Content-Length: " .. int_to_str(str_len(body)) .. crlf
+  req = req .. "Connection: close" .. crlf
+  req = req .. crlf
+  req = req .. body
+  let sock = tcp_connect(host, 80)
+  if not tcp_ok(sock) do
+    return "error: could not connect to " .. host
+  end
+  tcp_send(sock, req)
+  let response = tcp_recv(sock)
+  tcp_close(sock)
+  return response
+end
+
+fn http_status(response: str) -> str
+  let i: i64 = 0
+  while i < str_len(response) do
+    if char_at(response, i) == 13 do
+      return str_slice(response, 0, i)
+    end
+    i += 1
+  end
+  return str_slice(response, 0, 15)
+end
+
+fn http_body(response: str) -> str
+  let i: i64 = 0
+  let len = str_len(response)
+  while i < len - 3 do
+    if char_at(response, i) == 13 do
+      if char_at(response, i + 1) == 10 do
+        if char_at(response, i + 2) == 13 do
+          if char_at(response, i + 3) == 10 do
+            return str_slice(response, i + 4, len - i - 4)
+          end
+        end
+      end
+    end
+    i += 1
+  end
+  return response
+end

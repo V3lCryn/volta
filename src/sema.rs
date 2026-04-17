@@ -115,25 +115,50 @@ impl Checker {
         c.fn_types.insert("xor_bytes".into(),    VType::Nil);
         c.fn_types.insert("bytes_to_hex".into(), VType::Str);
         c.fn_types.insert("str_to_hex".into(),   VType::Str);
+        // strings stdlib
+        c.fn_types.insert("str_upper".into(),       VType::Str);
+        c.fn_types.insert("str_lower".into(),       VType::Str);
+        c.fn_types.insert("str_reverse".into(),     VType::Str);
+        c.fn_types.insert("str_repeat".into(),      VType::Str);
+        c.fn_types.insert("str_pad_left".into(),    VType::Str);
+        c.fn_types.insert("str_pad_right".into(),   VType::Str);
+        c.fn_types.insert("str_starts_with".into(), VType::Bool);
+        c.fn_types.insert("str_ends_with".into(),   VType::Bool);
+        c.fn_types.insert("str_index_of".into(),    VType::Int);
+        c.fn_types.insert("str_trim".into(),        VType::Str);
+        c.fn_types.insert("str_split_at".into(),    VType::Str);
+        // crypto stdlib
+        c.fn_types.insert("xor_encrypt".into(),     VType::Str);
+        c.fn_types.insert("str_to_hex_str".into(),  VType::Str);
+        c.fn_types.insert("looks_base64".into(),    VType::Bool);
+        c.fn_types.insert("looks_encrypted".into(), VType::Bool);
+        c.fn_types.insert("is_b64_char".into(),     VType::Bool);
+        // math stdlib
+        c.fn_types.insert("is_prime".into(),        VType::Bool);
+        c.fn_types.insert("fibonacci".into(),       VType::Int);
+        c.fn_types.insert("gcd".into(),             VType::Int);
+        c.fn_types.insert("factorial".into(),       VType::Int);
+        c.fn_types.insert("clamp".into(),           VType::Int);
+        // TCP sockets
+        c.fn_types.insert("tcp_connect".into(),    VType::Int);
+        c.fn_types.insert("tcp_listen".into(),     VType::Int);
+        c.fn_types.insert("tcp_accept".into(),     VType::Int);
+        c.fn_types.insert("tcp_send".into(),       VType::Bool);
+        c.fn_types.insert("tcp_send_bytes".into(), VType::Bool);
+        c.fn_types.insert("tcp_recv".into(),       VType::Str);
+        c.fn_types.insert("tcp_recv_line".into(),  VType::Str);
+        c.fn_types.insert("tcp_close".into(),      VType::Nil);
+        c.fn_types.insert("tcp_ok".into(),         VType::Bool);
+        c.fn_types.insert("tcp_peer_ip".into(),    VType::Str);
+        // http stdlib
+        c.fn_types.insert("http_get".into(),        VType::Str);
+        c.fn_types.insert("http_post".into(),       VType::Str);
+        c.fn_types.insert("http_status".into(),     VType::Str);
+        c.fn_types.insert("http_body".into(),       VType::Str);
+        c.fn_types.insert("http_host".into(),       VType::Str);
+        c.fn_types.insert("http_path".into(),       VType::Str);
         // File I/O
         c.fn_types.insert("file_read".into(),     VType::Str);
-        c.fn_types.insert("file_write".into(),    VType::Bool);
-        c.fn_types.insert("file_append".into(),   VType::Bool);
-        c.fn_types.insert("file_exists".into(),   VType::Bool);
-        c.fn_types.insert("file_delete".into(),   VType::Bool);
-        c.fn_types.insert("file_size".into(),     VType::Int);
-        c.fn_types.insert("file_readline".into(), VType::Str);
-        // TCP sockets
-        c.fn_types.insert("tcp_connect".into(),   VType::Int);
-        c.fn_types.insert("tcp_listen".into(),    VType::Int);
-        c.fn_types.insert("tcp_accept".into(),    VType::Int);
-        c.fn_types.insert("tcp_send".into(),      VType::Bool);
-        c.fn_types.insert("tcp_send_bytes".into(),VType::Bool);
-        c.fn_types.insert("tcp_recv".into(),      VType::Str);
-        c.fn_types.insert("tcp_recv_line".into(), VType::Str);
-        c.fn_types.insert("tcp_close".into(),     VType::Nil);
-        c.fn_types.insert("tcp_ok".into(),        VType::Bool);
-        c.fn_types.insert("tcp_peer_ip".into(),   VType::Str);
         c.fn_types.insert("file_write".into(),    VType::Bool);
         c.fn_types.insert("file_append".into(),   VType::Bool);
         c.fn_types.insert("file_exists".into(),   VType::Bool);
