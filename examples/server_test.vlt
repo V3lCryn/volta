@@ -1,0 +1,31 @@
+import "lib/http_server"
+
+let port: i64 = 8080
+let server = http_server_start(port)
+print("Volta HTTP server running on port " .. int_to_str(port))
+print("Try: curl http://localhost:8080/")
+print("Try: curl http://localhost:8080/health")
+print("Press Ctrl+C to stop")
+
+let health_json = "{" .. "\"status\":\"ok\"" .. "," .. "\"server\":\"volta\"" .. "}"
+let version_json = "{" .. "\"version\":\"0.2.0\"" .. "," .. "\"language\":\"volta\"" .. "}"
+
+while true do
+  let client = http_server_accept(server)
+  let request = http_req_read(client)
+  let path = http_req_path(request)
+  let method = http_req_method(request)
+  print(method .. " " .. path)
+
+  if str_eq(path, "/") do
+    http_respond(client, 200, "Hello from Volta!")
+  end
+
+  if str_eq(path, "/health") do
+    http_respond_json(client, 200, health_json)
+  end
+
+  if str_eq(path, "/version") do
+    http_respond_json(client, 200, version_json)
+  end
+end
