@@ -1,0 +1,31 @@
+-- File I/O demo
+
+-- Write a file
+let ok = file_write("test.txt", "Hello from Volta!\nLine 2\nLine 3\n")
+print("wrote: " .. bool_to_str(ok))
+
+-- Check it exists
+print("exists: " .. bool_to_str(file_exists("test.txt")))
+
+-- Get size
+print("size: " .. int_to_str(file_size("test.txt")) .. " bytes")
+
+-- Read it back
+let contents = file_read("test.txt")
+print("contents:")
+print(contents)
+
+-- Append to it
+file_append("test.txt", "Line 4\n")
+print("after append, size: " .. int_to_str(file_size("test.txt")) .. " bytes")
+
+-- Read a specific line
+let line1 = file_readline("test.txt", 0)
+let line2 = file_readline("test.txt", 1)
+print("line 0: " .. line1)
+print("line 1: " .. line2)
+
+-- Delete it
+let deleted = file_delete("test.txt")
+print("deleted: " .. bool_to_str(deleted))
+print("exists after delete: " .. bool_to_str(file_exists("test.txt")))

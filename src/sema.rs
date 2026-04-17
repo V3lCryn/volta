@@ -115,6 +115,14 @@ impl Checker {
         c.fn_types.insert("xor_bytes".into(),    VType::Nil);
         c.fn_types.insert("bytes_to_hex".into(), VType::Str);
         c.fn_types.insert("str_to_hex".into(),   VType::Str);
+        // File I/O
+        c.fn_types.insert("file_read".into(),     VType::Str);
+        c.fn_types.insert("file_write".into(),    VType::Bool);
+        c.fn_types.insert("file_append".into(),   VType::Bool);
+        c.fn_types.insert("file_exists".into(),   VType::Bool);
+        c.fn_types.insert("file_delete".into(),   VType::Bool);
+        c.fn_types.insert("file_size".into(),     VType::Int);
+        c.fn_types.insert("file_readline".into(), VType::Str);
         c
     }
 

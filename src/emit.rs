@@ -221,7 +221,15 @@ impl Emitter {
         self.line(r#"static char** _argv=NULL;"#);
         self.line(r#"static int64_t  arg_count(void){return (int64_t)_argc;}"#);
         self.line(r#"static const char* arg_get(int64_t i){if(i<0||i>=_argc)return"";return _argv[i];}"#);
-                self.line("// ───────────────────────────────────────────────────────────");
+        // ── File I/O ──────────────────────────────────────────────
+        self.line(r#"static const char* file_read(const char* path){FILE*f=fopen(path,"r");if(!f)return "";fseek(f,0,SEEK_END);long sz=ftell(f);rewind(f);char*buf=(char*)malloc(sz+1);if(!buf){fclose(f);return "";}fread(buf,1,sz,f);buf[sz]=0;fclose(f);char*d=_vbuf+_vpos;if(sz<65000){memcpy(d,buf,sz+1);_vpos=(_vpos+sz+1)%131072;}free(buf);return d;}"#);
+        self.line(r#"static bool file_write(const char* path,const char* data){FILE*f=fopen(path,"w");if(!f)return false;fputs(data,f);fclose(f);return true;}"#);
+        self.line(r#"static bool file_append(const char* path,const char* data){FILE*f=fopen(path,"a");if(!f)return false;fputs(data,f);fclose(f);return true;}"#);
+        self.line(r#"static bool file_exists(const char* path){FILE*f=fopen(path,"r");if(!f)return false;fclose(f);return true;}"#);
+        self.line(r#"static bool file_delete(const char* path){return remove(path)==0;}"#);
+        self.line(r#"static int64_t file_size(const char* path){FILE*f=fopen(path,"r");if(!f)return -1;fseek(f,0,SEEK_END);long sz=ftell(f);fclose(f);return (int64_t)sz;}"#);
+        self.line(r#"static const char* file_readline(const char* path,int64_t n){FILE*f=fopen(path,"r");if(!f)return "";char line[4096];int64_t i=0;while(i<=n&&fgets(line,sizeof(line),f)){if(i==n){fclose(f);char*d=_vbuf+_vpos;int len=strlen(line);if(len>0&&line[len-1]=='\n')line[--len]=0;memcpy(d,line,len+1);_vpos=(_vpos+len+1)%131072;return d;}i++;}fclose(f);return "";}"#);
+        self.line("// ───────────────────────────────────────────────────────────");
         self.line("");
     }
 
@@ -289,7 +297,7 @@ impl Emitter {
                     "str_reverse","str_repeat","str_pad_left","str_pad_right","str_slice",
                     "str_replace","char_from","rot13","caesar","xor_str","hex",
                     "bytes_to_hex","arg_get","input","xor_encrypt","str_to_hex_str",
-                    "greet","repeat_str",
+                    "greet","repeat_str","file_read","file_readline",
                 ];
                 if STR_CALLS.contains(&name.as_str()) {
                     return "const char*".into();
@@ -753,7 +761,7 @@ impl Emitter {
                     "str_reverse","str_repeat","str_pad_left","str_pad_right","str_slice",
                     "str_replace","char_from","rot13","caesar","xor_str","hex",
                     "bytes_to_hex","str_to_hex_str","arg_get","input","xor_encrypt",
-                    "str_to_hex","greet","repeat",
+                    "str_to_hex","greet","repeat","file_read","file_readline",
                 ];
                 if STR_BUILTINS.contains(&name.as_str()) {
                     return self.emit_expr(expr);
