@@ -1,0 +1,91 @@
+-- lib/http_server.vlt — HTTP server for Volta
+
+fn http_server_start(port: i64) -> i64
+  let sock = tcp_listen(port)
+  return sock
+end
+
+fn http_server_accept(server: i64) -> i64
+  return tcp_accept(server)
+end
+
+fn http_req_read(client: i64) -> str
+  let req: str = ""
+  let line = tcp_recv_line(client)
+  while str_len(line) > 0 do
+    req = req .. line .. "\n"
+    line = tcp_recv_line(client)
+  end
+  return req
+end
+
+fn http_req_path(request: str) -> str
+  -- request looks like "GET /path HTTP/1.1"
+  -- find space after method
+  let i: i64 = 0
+  while i < str_len(request) do
+    if char_at(request, i) == 32 do
+      -- found first space, path starts here
+      let j = i + 1
+      while j < str_len(request) do
+        if char_at(request, j) == 32 do
+          return str_slice(request, i + 1, j - i - 1)
+        end
+        j += 1
+      end
+    end
+    i += 1
+  end
+  return "/"
+end
+
+fn http_req_method(request: str) -> str
+  let i: i64 = 0
+  while i < str_len(request) do
+    if char_at(request, i) == 32 do
+      return str_slice(request, 0, i)
+    end
+    i += 1
+  end
+  return "GET"
+end
+
+fn http_respond(client: i64, status: i64, body: str)
+  let crlf = "\r\n"
+  let status_text: str = "OK"
+  if status == 200 do status_text = "OK" end
+  if status == 201 do status_text = "Created" end
+  if status == 400 do status_text = "Bad Request" end
+  if status == 401 do status_text = "Unauthorized" end
+  if status == 403 do status_text = "Forbidden" end
+  if status == 404 do status_text = "Not Found" end
+  if status == 500 do status_text = "Internal Server Error" end
+  let resp = "HTTP/1.0 " .. int_to_str(status) .. " " .. status_text .. crlf
+  resp = resp .. "Content-Type: text/plain" .. crlf
+  resp = resp .. "Content-Length: " .. int_to_str(str_len(body)) .. crlf
+  resp = resp .. "Connection: close" .. crlf
+  resp = resp .. crlf
+  resp = resp .. body
+  tcp_send(client, resp)
+  tcp_close(client)
+end
+
+fn http_respond_json(client: i64, status: i64, body: str)
+  let crlf = "\r\n"
+  let status_text: str = "OK"
+  if status == 200 do status_text = "OK" end
+  if status == 201 do status_text = "Created" end
+  if status == 400 do status_text = "Bad Request" end
+  if status == 401 do status_text = "Unauthorized" end
+  if status == 403 do status_text = "Forbidden" end
+  if status == 404 do status_text = "Not Found" end
+  if status == 500 do status_text = "Internal Server Error" end
+  let resp = "HTTP/1.0 " .. int_to_str(status) .. " " .. status_text .. crlf
+  resp = resp .. "Content-Type: application/json" .. crlf
+  resp = resp .. "Content-Length: " .. int_to_str(str_len(body)) .. crlf
+  resp = resp .. "Connection: close" .. crlf
+  resp = resp .. crlf
+  resp = resp .. body
+  tcp_send(client, resp)
+  tcp_close(client)
+end

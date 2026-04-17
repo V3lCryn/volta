@@ -1,0 +1,22 @@
+import "lib/json"
+
+let q = "\""
+let data = "{" .. q .. "name" .. q .. ":" .. q .. "admin" .. q .. "," .. q .. "role" .. q .. ":" .. q .. "superuser" .. q .. "," .. q .. "level" .. q .. ":42," .. q .. "active" .. q .. ":true}"
+
+let name   = json_get_str(data, "name")
+let role   = json_get_str(data, "role")
+let level  = json_get_int(data, "level")
+let active = json_get_bool(data, "active")
+
+print("name:   " .. name)
+print("role:   " .. role)
+print("level:  " .. int_to_str(level))
+print("active: " .. bool_to_str(active))
+
+-- build JSON in steps to avoid buffer overflow
+let parts = json_str("status", "ok")
+parts = parts .. "," .. json_str("user", name)
+parts = parts .. "," .. json_int("level", level)
+parts = parts .. "," .. json_bool("active", active)
+let response = json_obj(parts)
+print("built:  " .. response)

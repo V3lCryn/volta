@@ -1,0 +1,107 @@
+-- lib/json.vlt — JSON parser for Volta
+-- handles flat JSON objects: {"key":"value","key2":123,"key3":true}
+
+fn json_find_key(json: str, key: str) -> i64
+  -- find "key": in the json string, return index after the colon
+  let search = "\"" .. key .. "\":"
+  let jlen = str_len(json)
+  let slen = str_len(search)
+  let i: i64 = 0
+  while i < jlen - slen do
+    if str_eq(str_slice(json, i, slen), search) do
+      return i + slen
+    end
+    i += 1
+  end
+  return -1
+end
+
+fn json_get_str(json: str, key: str) -> str
+  let pos = json_find_key(json, key)
+  if pos < 0 do return "" end
+  let jlen = str_len(json)
+  -- skip whitespace
+  while pos < jlen do
+    if char_at(json, pos) != 32 do break end
+    pos += 1
+  end
+  -- expect opening quote
+  if char_at(json, pos) != 34 do return "" end
+  pos += 1
+  -- read until closing quote
+  let result: str = ""
+  while pos < jlen do
+    let c = char_at(json, pos)
+    if c == 34 do break end
+    if c == 92 do
+      -- backslash escape
+      pos += 1
+      result = result .. char_from(char_at(json, pos))
+    else
+      result = result .. char_from(c)
+    end
+    pos += 1
+  end
+  return result
+end
+
+fn json_get_int(json: str, key: str) -> i64
+  let pos = json_find_key(json, key)
+  if pos < 0 do return 0 end
+  let jlen = str_len(json)
+  while pos < jlen do
+    if char_at(json, pos) != 32 do break end
+    pos += 1
+  end
+  let numstr: str = ""
+  let c = char_at(json, pos)
+  -- handle negative
+  if c == 45 do
+    numstr = "-"
+    pos += 1
+  end
+  while pos < jlen do
+    let c = char_at(json, pos)
+    if c >= 48 and c <= 57 do
+      numstr = numstr .. char_from(c)
+      pos += 1
+    else
+      break
+    end
+  end
+  if str_len(numstr) == 0 do return 0 end
+  return to_int(numstr)
+end
+
+fn json_get_bool(json: str, key: str) -> bool
+  let pos = json_find_key(json, key)
+  if pos < 0 do return false end
+  let jlen = str_len(json)
+  while pos < jlen do
+    if char_at(json, pos) != 32 do break end
+    pos += 1
+  end
+  -- check for 'true'
+  if pos + 4 <= jlen do
+    if str_eq(str_slice(json, pos, 4), "true") do
+      return true
+    end
+  end
+  return false
+end
+
+fn json_str(key: str, value: str) -> str
+  return "\"" .. key .. "\":\"" .. value .. "\""
+end
+
+fn json_int(key: str, value: i64) -> str
+  return "\"" .. key .. "\":" .. int_to_str(value)
+end
+
+fn json_bool(key: str, value: bool) -> str
+  return "\"" .. key .. "\":" .. bool_to_str(value)
+end
+
+fn json_obj(contents: str) -> str
+  return "{" .. contents .. "}"
+end
