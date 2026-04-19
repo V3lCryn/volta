@@ -13,3 +13,5 @@ hello
 hello.c
 showcase.c
 test*.vlt
+examples/pg_test.vlt
+examples/pg_test
