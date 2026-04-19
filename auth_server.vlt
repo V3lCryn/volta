@@ -1,0 +1,114 @@
+-- Volta Auth Server -- Stantec IP Protection System
+import "lib/http_server"
+import "lib/json"
+
+@extern "C" do
+  fn getenv(name: str) -> str
+end
+
+fn get_param(request: str, param: str) -> str
+  let search = param .. "="
+  let i: i64 = 0
+  let rlen = str_len(request)
+  let slen = str_len(search)
+  while i < rlen - slen do
+    if str_eq(str_slice(request, i, slen), search) do
+      let j = i + slen
+      let result: str = ""
+      while j < rlen do
+        let c = char_at(request, j)
+        if c == 32 or c == 38 or c == 13 or c == 10 or c == 72 do
+          break
+        end
+        result = result .. char_from(c)
+        j += 1
+      end
+      return result
+    end
+    i += 1
+  end
+  return ""
+end
+
+fn starts_with(s: str, p: str) -> bool
+  let plen = str_len(p)
+  if plen > str_len(s) do return false end
+  return str_eq(str_slice(s, 0, plen), p)
+end
+
+fn check_access(username: str, tool: str) -> bool
+  let sql = "SELECT a.granted FROM access a JOIN users u ON a.user_id=u.id JOIN tools t ON a.tool_id=t.id WHERE u.username='"
+  sql = sql .. pg_escape(username) .. "' AND t.name='" .. pg_escape(tool) .. "' AND u.active=true AND t.active=true LIMIT 1"
+  let rows = pg_query(sql)
+  if rows == 0 do
+    pg_free()
+    return false
+  end
+  let val = pg_value(0, 0)
+  pg_free()
+  return str_eq(val, "t")
+end
+
+fn log_audit(username: str, tool: str, granted: bool, reason: str)
+  let g: str = "false"
+  if granted do g = "true" end
+  let sql = "INSERT INTO audit_log (username, tool_name, granted, reason) VALUES ('"
+  sql = sql .. pg_escape(username) .. "','" .. pg_escape(tool) .. "'," .. g .. ",'" .. pg_escape(reason) .. "')"
+  pg_exec(sql)
+end
+
+let connstr = getenv("VOLTA_DB_URL")
+print("Connecting to database...")
+let db_ok = pg_connect(connstr)
+if not db_ok do print("Failed: " .. pg_error()) end
+if db_ok do print("Database connected") end
+
+let port: i64 = 8080
+let server = http_server_start(port)
+print("Volta Auth Server on port " .. int_to_str(port))
+
+while true do
+  let client = http_server_accept(server)
+  let request = http_req_read(client)
+  let path = http_req_path(request)
+  print("GET " .. path)
+
+  if str_eq(path, "/health") do
+    http_respond_json(client, 200, json_obj(json_str("status", "ok") .. "," .. json_str("server", "volta-auth")))
+  end
+
+  if starts_with(path, "/auth") do
+    let username = get_param(request, "user")
+    let tool     = get_param(request, "tool")
+    print("  user=" .. username .. " tool=" .. tool)
+    let granted = check_access(username, tool)
+    let status: str = "denied"
+    if granted do status = "granted" end
+    log_audit(username, tool, granted, status)
+    let parts = json_str("status", status)
+    parts = parts .. "," .. json_str("user", username)
+    parts = parts .. "," .. json_str("tool", tool)
+    parts = parts .. "," .. json_bool("granted", granted)
+    let code: i64 = 403
+    if granted do code = 200 end
+    http_respond_json(client, code, json_obj(parts))
+  end
+
+  if str_eq(path, "/audit") do
+    let rows = pg_query("SELECT username, tool_name, granted, reason, timestamp FROM audit_log ORDER BY timestamp DESC LIMIT 20")
+    let result: str = "["
+    let i: i64 = 0
+    while i < rows do
+      if i > 0 do result = result .. "," end
+      let entry = json_str("user", pg_value(i, 0))
+      entry = entry .. "," .. json_str("tool", pg_value(i, 1))
+      entry = entry .. "," .. json_str("granted", pg_value(i, 2))
+      entry = entry .. "," .. json_str("reason", pg_value(i, 3))
+      result = result .. json_obj(entry)
+      i += 1
+    end
+    result = result .. "]"
+    pg_free()
+    http_respond_json(client, 200, result)
+  end
+end
