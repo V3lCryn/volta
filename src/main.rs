@@ -133,6 +133,9 @@ fn run_file(input_path: &Path, extra_args: &[String], do_run: bool) {
             "-Wno-unused-variable",
             "-Wno-int-conversion",
             "-lm",
+            "-I/usr/local/opt/libpq/include",
+            "-L/usr/local/opt/libpq/lib",
+            "-lpq",
         ])
         .status()
         .unwrap_or_else(|e| error_exit(&format!("compiler error: {}", e)));

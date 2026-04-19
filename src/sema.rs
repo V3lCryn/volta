@@ -52,7 +52,7 @@ impl SemaError {
 }
 
 pub struct Checker {
-    // stack of scopes: each is a map from name -> type
+    // stack of scopes: each is a map from name -> type 
     scopes:   Vec<HashMap<String, VType>>,
     fn_types: HashMap<String, VType>,
     structs:  HashMap<String, Vec<(String, VType)>>,
@@ -150,6 +150,17 @@ impl Checker {
         c.fn_types.insert("tcp_close".into(),      VType::Nil);
         c.fn_types.insert("tcp_ok".into(),         VType::Bool);
         c.fn_types.insert("tcp_peer_ip".into(),    VType::Str);
+        // PostgreSQL
+        c.fn_types.insert("pg_connect".into(),  VType::Bool);
+        c.fn_types.insert("pg_close".into(),    VType::Nil);
+        c.fn_types.insert("pg_ok".into(),       VType::Bool);
+        c.fn_types.insert("pg_error".into(),    VType::Str);
+        c.fn_types.insert("pg_exec".into(),     VType::Bool);
+        c.fn_types.insert("pg_escape".into(),   VType::Str);
+        c.fn_types.insert("pg_query".into(),    VType::Unknown);
+        c.fn_types.insert("pg_rows".into(),     VType::Int);
+        c.fn_types.insert("pg_value".into(),    VType::Str);
+        c.fn_types.insert("pg_free".into(),     VType::Nil);
         // http stdlib
         c.fn_types.insert("http_get".into(),        VType::Str);
         c.fn_types.insert("http_post".into(),       VType::Str);

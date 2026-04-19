@@ -243,6 +243,21 @@ impl Emitter {
         self.line(r#"static void tcp_close(int64_t fd){close((int)fd);}"#);
         self.line(r#"static bool tcp_ok(int64_t fd){return fd>=0;}"#);
         self.line(r#"static const char* tcp_peer_ip(int64_t fd){struct sockaddr_in a={0};socklen_t l=sizeof(a);getpeername((int)fd,(struct sockaddr*)&a,&l);char*d=_vbuf+_vpos;inet_ntop(AF_INET,&a.sin_addr,d,64);_vpos=(_vpos+64)%131072;return d;}"#);
+        // ── PostgreSQL via libpq ─────────────────────────────────────
+        self.line(r#"#include <libpq-fe.h>"#);
+        self.line(r#"static PGconn* _pg_conn=NULL;"#);
+        self.line(r#"static bool pg_connect(const char* connstr){_pg_conn=PQconnectdb(connstr);return PQstatus(_pg_conn)==CONNECTION_OK;}"#);
+        self.line(r#"static void pg_close(void){if(_pg_conn){PQfinish(_pg_conn);_pg_conn=NULL;}}"#);
+        self.line(r#"static bool pg_ok(void){return _pg_conn&&PQstatus(_pg_conn)==CONNECTION_OK;}"#);
+        self.line(r#"static const char* pg_error(void){return _pg_conn?PQerrorMessage(_pg_conn):"no connection";}"#);
+        self.line(r#"typedef struct{PGresult*res;int rows;int cols;}VPGResult;"#);
+        self.line(r#"static PGresult* _pg_res=NULL;"#);
+        self.line(r#"static int64_t pg_query(const char* sql){if(_pg_res){PQclear(_pg_res);_pg_res=NULL;}if(!_pg_conn)return 0;_pg_res=PQexec(_pg_conn,sql);if(!_pg_res)return 0;return (int64_t)PQntuples(_pg_res);}"#);
+        self.line(r#"static const char* pg_value(int64_t row,int64_t col){if(!_pg_res)return "";return PQgetvalue(_pg_res,(int)row,(int)col);}"#);
+        self.line(r#"static int64_t pg_rows(void){return _pg_res?(int64_t)PQntuples(_pg_res):0;}"#);
+        self.line(r#"static void pg_free(void){if(_pg_res){PQclear(_pg_res);_pg_res=NULL;}}"#);
+        self.line(r#"static bool pg_exec(const char* sql){if(!_pg_conn)return false;PGresult*r=PQexec(_pg_conn,sql);bool ok=PQresultStatus(r)==PGRES_COMMAND_OK||PQresultStatus(r)==PGRES_TUPLES_OK;PQclear(r);return ok;}"#);
+        self.line(r#"static const char* pg_escape(const char* s){static char buf[8192];size_t err;PQescapeStringConn(_pg_conn,buf,s,strlen(s),NULL);(void)err;return buf;}"#);
         self.line("// ───────────────────────────────────────────────────────────");
         self.line("");
     }
