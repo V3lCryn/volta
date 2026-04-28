@@ -1,4 +1,4 @@
-// volta/src/main.rs — Volta compiler v0.3.0
+// volta/src/main.rs — Volta compiler v0.4.0
 
 mod error;
 mod lexer;
@@ -6,6 +6,7 @@ mod ast;
 mod parser;
 mod sema;
 mod emit;
+mod lsp;
 
 use error::{VoltaError, Span};
 use std::collections::HashSet;
@@ -14,7 +15,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 
-const VERSION: &str = "0.3.0";
+const VERSION: &str = "0.4.0";
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -25,6 +26,7 @@ fn main() {
         Some("new")   => cmd_new(&args),
         Some("build") => cmd_build(&args, false),
         Some("run")   => cmd_build(&args, true),
+        Some("lsp")   => lsp::run_server(),
         Some(path)    => {
             let pb = PathBuf::from(path);
             if !pb.exists() {
@@ -374,6 +376,7 @@ fn print_help() {
     println!("  volta build <file.vlt>     compile only");
     println!("  volta new <project>        create a new project");
     println!("  volta --version            show version");
+    println!("  volta lsp                  start LSP server (for editors)");
     println!("  volta --help               show this message");
     println!();
     println!("\x1b[1mEXAMPLES\x1b[0m");

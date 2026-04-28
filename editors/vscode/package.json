@@ -1,0 +1,37 @@
+{
+  "name": "volta-lang",
+  "displayName": "Volta Language",
+  "description": "Volta language support: syntax highlighting and diagnostics",
+  "version": "0.4.0",
+  "publisher": "V3lCryn",
+  "engines": { "vscode": "^1.75.0" },
+  "categories": ["Programming Languages"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/V3lCryn/volta"
+  },
+  "activationEvents": [
+    "onLanguage:volta"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "volta",
+        "aliases": ["Volta", "volta"],
+        "extensions": [".vlt"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "volta",
+        "scopeName": "source.volta",
+        "path": "./syntaxes/volta.tmLanguage.json"
+      }
+    ]
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}
