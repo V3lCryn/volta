@@ -80,6 +80,19 @@ impl Parser {
         })}
     }
 
+    // Parse a type name: either a plain ident or [ident] for typed arrays
+    fn parse_type(&mut self) -> PR<String> {
+        self.skip_newlines();
+        if self.check(&TokenKind::LBracket) {
+            self.advance();
+            let elem = self.expect_ident()?;
+            self.expect(&TokenKind::RBracket)?;
+            Ok(format!("[{}]", elem))
+        } else {
+            self.expect_ident()
+        }
+    }
+
     fn eat_newlines_and(&mut self, kind: &TokenKind) -> bool {
         let saved = self.pos;
         self.skip_newlines();
@@ -153,7 +166,7 @@ impl Parser {
         let line = self.peek_line();
         self.advance();
         let name = self.expect_ident()?;
-        let ty = if self.eat(&TokenKind::Colon) { Some(self.expect_ident()?) } else { None };
+        let ty = if self.eat(&TokenKind::Colon) { Some(self.parse_type()?) } else { None };
         self.expect(&TokenKind::Eq)?;
         let value = self.parse_expr()?;
         Ok(Stmt::Let { name, ty, value, line })
@@ -244,7 +257,7 @@ impl Parser {
         self.expect(&TokenKind::LParen)?;
         let params = self.parse_param_list()?;
         self.expect(&TokenKind::RParen)?;
-        let ret_ty = if self.eat(&TokenKind::Arrow) { Some(self.expect_ident()?) } else { None };
+        let ret_ty = if self.eat(&TokenKind::Arrow) { Some(self.parse_type()?) } else { None };
         self.eat(&TokenKind::Do);
         let body = self.parse_block()?;
         self.expect(&TokenKind::End)?;
@@ -260,7 +273,7 @@ impl Parser {
             if matches!(self.peek(), TokenKind::End | TokenKind::Eof) { break; }
             let fname = self.expect_ident()?;
             self.expect(&TokenKind::Colon)?;
-            let ftype = self.expect_ident()?;
+            let ftype = self.parse_type()?;
             fields.push((fname, ftype));
         }
         self.expect(&TokenKind::End)?;
@@ -273,7 +286,7 @@ impl Parser {
         if self.check(&TokenKind::RParen) { return Ok(params); }
         loop {
             let name = self.expect_ident()?;
-            let ty = if self.eat(&TokenKind::Colon) { Some(self.expect_ident()?) } else { None };
+            let ty = if self.eat(&TokenKind::Colon) { Some(self.parse_type()?) } else { None };
             params.push(Param { name, ty });
             if !self.eat(&TokenKind::Comma) { break; }
         }
@@ -354,7 +367,7 @@ impl Parser {
             self.expect(&TokenKind::LParen)?;
             let params = self.parse_param_list()?;
             self.expect(&TokenKind::RParen)?;
-            let ret_ty = if self.eat(&TokenKind::Arrow) { Some(self.expect_ident()?) } else { None };
+            let ret_ty = if self.eat(&TokenKind::Arrow) { Some(self.parse_type()?) } else { None };
             fns.push(ExternFn { name, params, ret_ty });
         }
         self.expect(&TokenKind::End)?;

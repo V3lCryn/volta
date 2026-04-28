@@ -196,6 +196,13 @@ impl Emitter {
         self.line(r#"#define ASET_STR(a,i,v) _arr_set(&(a),(i),(void*)(v))"#);
         self.line(r#"#define APUSH_INT(a,v) _arr_push(&(a),(void*)(intptr_t)(v))"#);
         self.line(r#"#define APUSH_STR(a,v) _arr_push(&(a),(void*)(v))"#);
+        // Float arrays: store double bits as int64 inside void*
+        self.line(r#"static double _aget_flt(VArray*a,int64_t i){int64_t _bi=(int64_t)(intptr_t)_arr_get(a,i);double _bf;memcpy(&_bf,&_bi,8);return _bf;}"#);
+        self.line(r#"static void _aset_flt(VArray*a,int64_t i,double v){int64_t _bi;memcpy(&_bi,&v,8);_arr_set(a,i,(void*)(intptr_t)_bi);}"#);
+        self.line(r#"static void _apush_flt(VArray*a,double v){int64_t _bi;memcpy(&_bi,&v,8);_arr_push(a,(void*)(intptr_t)_bi);}"#);
+        self.line(r#"#define AGET_FLT(a,i) _aget_flt(&(a),(i))"#);
+        self.line(r#"#define ASET_FLT(a,i,v) _aset_flt(&(a),(i),(v))"#);
+        self.line(r#"#define APUSH_FLT(a,v) _apush_flt(&(a),(v))"#);
         // ── Cyber / low-level builtins ──────────────────────────────
         self.line(r#"static const char* hex(int64_t n){char*d=_vbuf+_vpos;int k=snprintf(d,32,"0x%llx",(unsigned long long)n);_vpos=(_vpos+k+1)%131072;return d;}"#);
         self.line(r#"static void hex_dump(const void* ptr, int64_t len){"#);
@@ -318,6 +325,7 @@ impl Emitter {
             Some("str")               => "const char*".into(),
             Some("ptr")               => "void*".into(),
             Some("Result")            => "VResult".into(),
+            Some(arr) if arr.starts_with('[') => "VArray".into(),
             Some(name) if self.struct_names.contains(name) => name.to_string(),
             Some(other)               => other.to_string(), // pass through unknown
         }
@@ -353,6 +361,7 @@ impl Emitter {
                     Some("i16")               => "int16_t".into(),
                     Some("i32")               => "int32_t".into(),
                     Some("i64"|"int")         => "int64_t".into(),
+                    Some(t) if t.starts_with('[') => "VArray".into(),
                     Some(other) if self.struct_names.contains(other) => other.to_string(),
                     _                         => "int64_t".into(), // default numeric
                 }
@@ -508,14 +517,20 @@ impl Emitter {
                 if let Expr::Array(elems) = value {
                     let cap = if elems.is_empty() { 8 } else { elems.len().max(8) };
                     self.iline(&format!("VArray {} = _arr_new({});", name, cap));
+                    // Determine push macro from type annotation or element inference
+                    let ann_ty = ty.as_deref().unwrap_or("");
                     for el in elems {
                         let v = self.emit_expr(el);
-                        let elem_ty = self.infer_type(el);
-                        if elem_ty == "const char*" {
-                            self.iline(&format!("APUSH_STR({}, {});", name, v));
-                        } else {
-                            self.iline(&format!("APUSH_INT({}, {});", name, v));
-                        }
+                        let push_macro = match ann_ty {
+                            "[str]"                       => "APUSH_STR",
+                            "[f64]" | "[f32]" | "[float]" => "APUSH_FLT",
+                            t if t.starts_with('[')       => "APUSH_INT",
+                            _ => {
+                                if self.infer_type(el) == "const char*" { "APUSH_STR" }
+                                else { "APUSH_INT" }
+                            }
+                        };
+                        self.iline(&format!("{}({}, {});", push_macro, name, v));
                     }
                     return;
                 }
@@ -530,7 +545,12 @@ impl Emitter {
                     AssignTarget::Ident(n)       => self.iline(&format!("{} = {};", n, val)),
                     AssignTarget::Index(n, idx) => {
                         let i = self.emit_expr(idx);
-                        self.iline(&format!("ASET_INT({}, {}, {});", n, i, val));
+                        let set_macro = match self.var_types.get(n.as_str()).map(|s| s.as_str()).unwrap_or("") {
+                            "[str]"                       => "ASET_STR",
+                            "[f64]" | "[f32]" | "[float]" => "ASET_FLT",
+                            _                             => "ASET_INT",
+                        };
+                        self.iline(&format!("{}({}, {}, {});", set_macro, n, i, val));
                     }
                     AssignTarget::Field(obj, fld) => {
                         let o = self.emit_expr(obj);
@@ -859,11 +879,23 @@ impl Emitter {
                 if name == "push" && args.len() == 2 {
                     let arr = self.emit_expr(&args[0]);
                     let val = self.emit_expr(&args[1]);
-                    let vty = self.infer_type(&args[1]);
-                    if vty == "const char*" {
-                        return format!("APUSH_STR({}, {})", arr, val);
-                    }
-                    return format!("APUSH_INT({}, {})", arr, val);
+                    // Use element type from annotation when available
+                    let elem_ty = if let Expr::Ident(arr_name) = &args[0] {
+                        self.var_types.get(arr_name.as_str()).map(|s| s.as_str()).unwrap_or("")
+                    } else { "" };
+                    return match elem_ty {
+                        "[str]"                       => format!("APUSH_STR({}, {})", arr, val),
+                        "[f64]" | "[f32]" | "[float]" => format!("APUSH_FLT({}, {})", arr, val),
+                        t if t.starts_with('[')       => format!("APUSH_INT({}, {})", arr, val),
+                        _ => {
+                            // Fallback: infer from value type
+                            if self.infer_type(&args[1]) == "const char*" {
+                                format!("APUSH_STR({}, {})", arr, val)
+                            } else {
+                                format!("APUSH_INT({}, {})", arr, val)
+                            }
+                        }
+                    };
                 }
                 if name == "pop" && args.len() == 1 {
                     let arr = self.emit_expr(&args[0]);
@@ -916,8 +948,14 @@ impl Emitter {
             Expr::Index { target, index } => {
                 let t = self.emit_expr(target);
                 let i = self.emit_expr(index);
-                // Use AGET_INT as default - caller can cast if needed
-                format!("AGET_INT({}, {})", t, i)
+                let elem_ty = if let Expr::Ident(arr_name) = target.as_ref() {
+                    self.var_types.get(arr_name.as_str()).map(|s| s.as_str()).unwrap_or("")
+                } else { "" };
+                match elem_ty {
+                    "[str]"                            => format!("AGET_STR({}, {})", t, i),
+                    "[f64]" | "[f32]" | "[float]"      => format!("AGET_FLT({}, {})", t, i),
+                    _                                  => format!("AGET_INT({}, {})", t, i),
+                }
             }
         }
     }

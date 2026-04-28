@@ -10,12 +10,16 @@ pub enum VType {
     Int, Float, Bool, Str, Nil, Ptr,
     Struct(String),
     Enum(String),
+    Array(String),  // element type name, e.g. "i64", "str"
     Result,
     Unknown,
 }
 
 impl VType {
     pub fn from_str(s: &str) -> Self {
+        if s.starts_with('[') && s.ends_with(']') {
+            return VType::Array(s[1..s.len()-1].to_string());
+        }
         match s {
             "i8"|"i16"|"i32"|"i64"|"u8"|"u16"|"u32"|"u64"|"int" => VType::Int,
             "f32"|"f64"|"float" => VType::Float,
@@ -27,18 +31,19 @@ impl VType {
             other    => VType::Struct(other.to_string()),
         }
     }
-    pub fn to_display(&self) -> &str {
+    pub fn to_display(&self) -> String {
         match self {
-            VType::Int       => "int",
-            VType::Float     => "float",
-            VType::Bool      => "bool",
-            VType::Str       => "str",
-            VType::Nil       => "nil",
-            VType::Ptr       => "ptr",
-            VType::Struct(s) => s,
-            VType::Enum(s)   => s,
-            VType::Result    => "Result",
-            VType::Unknown   => "?",
+            VType::Int       => "int".into(),
+            VType::Float     => "float".into(),
+            VType::Bool      => "bool".into(),
+            VType::Str       => "str".into(),
+            VType::Nil       => "nil".into(),
+            VType::Ptr       => "ptr".into(),
+            VType::Struct(s) => s.clone(),
+            VType::Enum(s)   => s.clone(),
+            VType::Array(e)  => format!("[{}]", e),
+            VType::Result    => "Result".into(),
+            VType::Unknown   => "?".into(),
         }
     }
 }
@@ -250,7 +255,10 @@ impl Checker {
                 let val_ty = self.check_expr(value);
                 if let Some(ann) = ty {
                     let ann_ty = VType::from_str(ann);
-                    if ann_ty != VType::Unknown && val_ty != VType::Unknown
+                    // Array annotations are always compatible with array literals
+                    let is_array_ann = matches!(&ann_ty, VType::Array(_));
+                    if !is_array_ann
+                       && ann_ty != VType::Unknown && val_ty != VType::Unknown
                        && ann_ty != val_ty && val_ty != VType::Nil {
                         let ok = matches!((&ann_ty, &val_ty), (VType::Float, VType::Int) | (VType::Int, VType::Float));
                         if !ok {
@@ -426,6 +434,26 @@ impl Checker {
             }
 
             Expr::Call { name, args } => {
+                // push(arr, val) — validate element type when arr is typed
+                if name == "push" && args.len() == 2 {
+                    let arr_ty = self.check_expr(&args[0]);
+                    let val_ty = self.check_expr(&args[1]);
+                    if let VType::Array(elem) = &arr_ty {
+                        let expected = VType::from_str(elem);
+                        if val_ty != VType::Unknown && expected != VType::Unknown && val_ty != expected {
+                            let ok = matches!((&expected, &val_ty), (VType::Float, VType::Int) | (VType::Int, VType::Float));
+                            if !ok {
+                                self.errors.push(SemaError::new(
+                                    format!("type mismatch: array is '[{}]' but pushed value is '{}'",
+                                        elem, val_ty.to_display()),
+                                    self.current_line,
+                                    format!("push a '{}' value", elem),
+                                ));
+                            }
+                        }
+                    }
+                    return VType::Nil;
+                }
                 for a in args { self.check_expr(a); }
                 if let Some(t) = self.fn_types.get(name) {
                     t.clone()
@@ -492,6 +520,16 @@ impl Checker {
                     ));
                 }
                 VType::Unknown
+            }
+
+            Expr::Index { target, index } => {
+                self.check_expr(index);
+                let arr_ty = self.check_expr(target);
+                if let VType::Array(elem) = arr_ty {
+                    VType::from_str(&elem)
+                } else {
+                    VType::Unknown
+                }
             }
 
             _ => { VType::Unknown }
