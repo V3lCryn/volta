@@ -23,14 +23,15 @@ impl std::fmt::Display for EmitError {
 impl std::error::Error for EmitError {}
 
 pub struct Emitter {
-    out:          String,
-    indent:       usize,
-    fn_types:     HashMap<String, String>,
-    var_types:    HashMap<String, String>,
-    struct_defs:  HashMap<String, Vec<(String, String)>>,
-    struct_names: HashSet<String>,
-    enum_defs:    HashMap<String, Vec<String>>,
-    tmp_counter:  usize,
+    out:           String,
+    indent:        usize,
+    fn_types:      HashMap<String, String>,
+    var_types:     HashMap<String, String>,
+    struct_defs:   HashMap<String, Vec<(String, String)>>,
+    struct_names:  HashSet<String>,
+    enum_defs:     HashMap<String, Vec<String>>,
+    tmp_counter:   usize,
+    in_result_fn:  bool,
 }
 
 impl Emitter {
@@ -41,6 +42,7 @@ impl Emitter {
             struct_defs: HashMap::new(), struct_names: HashSet::new(),
             enum_defs: HashMap::new(),
             tmp_counter: 0,
+            in_result_fn: false,
         }
     }
 
@@ -287,6 +289,12 @@ impl Emitter {
         self.line(r#"static void pg_free(void){if(_pg_res){PQclear(_pg_res);_pg_res=NULL;}}"#);
         self.line(r#"static bool pg_exec(const char* sql){if(!_pg_conn)return false;PGresult*r=PQexec(_pg_conn,sql);bool ok=PQresultStatus(r)==PGRES_COMMAND_OK||PQresultStatus(r)==PGRES_TUPLES_OK;PQclear(r);return ok;}"#);
         self.line(r#"static const char* pg_escape(const char* s){static char buf[8192];size_t err;PQescapeStringConn(_pg_conn,buf,s,strlen(s),NULL);(void)err;return buf;}"#);
+        // ── Result type ──────────────────────────────────────────────
+        self.line(r#"typedef struct{bool ok;int64_t ival;const char* sval;double fval;const char* err;}VResult;"#);
+        self.line(r#"static VResult _volt_ok_i(int64_t v){VResult r;r.ok=true;r.ival=v;r.sval=NULL;r.fval=0;r.err=NULL;return r;}"#);
+        self.line(r#"static VResult _volt_ok_s(const char* v){VResult r;r.ok=true;r.ival=0;r.sval=v;r.fval=0;r.err=NULL;return r;}"#);
+        self.line(r#"static VResult _volt_ok_f(double v){VResult r;r.ok=true;r.ival=0;r.sval=NULL;r.fval=v;r.err=NULL;return r;}"#);
+        self.line(r#"static VResult _volt_err(const char* e){VResult r;r.ok=false;r.ival=0;r.sval=NULL;r.fval=0;r.err=e;return r;}"#);
         self.line("// ───────────────────────────────────────────────────────────");
         self.line("");
     }
@@ -309,6 +317,7 @@ impl Emitter {
             Some("bool")              => "bool".into(),
             Some("str")               => "const char*".into(),
             Some("ptr")               => "void*".into(),
+            Some("Result")            => "VResult".into(),
             Some(name) if self.struct_names.contains(name) => name.to_string(),
             Some(other)               => other.to_string(), // pass through unknown
         }
@@ -428,12 +437,15 @@ impl Emitter {
         let safe = Self::safe_name(&f.name);
         self.line(&format!("{} {}({}) {{", ret, safe, params));
         self.indent += 1;
+        let prev_result_fn = self.in_result_fn;
+        self.in_result_fn = f.ret_ty.as_deref() == Some("Result");
         for p in &f.params {
             if let Some(ty) = &p.ty {
                 self.var_types.insert(p.name.clone(), ty.clone());
             }
         }
         for stmt in &f.body { self.emit_stmt(stmt); }
+        self.in_result_fn = prev_result_fn;
         self.indent -= 1;
         self.line("}");
     }
@@ -468,6 +480,28 @@ impl Emitter {
                         };
                         self.var_types.insert(name.clone(), volta_ty.to_string());
                     }
+                }
+
+                // Special case: expr? in let → emit try-unwrap
+                if let Expr::Try(inner) = value {
+                    let inner_c = self.emit_expr(inner);
+                    let field = match c_ty.as_str() {
+                        "const char*" => "sval",
+                        "double" | "float" => "fval",
+                        _ => "ival",
+                    };
+                    if self.in_result_fn {
+                        self.iline(&format!(
+                            "{c} {n};{{VResult _vt={e};if(!_vt.ok){{return _vt;}}{n}=_vt.{f};}}",
+                            c=c_ty, n=name, e=inner_c, f=field
+                        ));
+                    } else {
+                        self.iline(&format!(
+                            "{c} {n};{{VResult _vt={e};if(!_vt.ok){{fprintf(stderr,\"error: %s\\n\",_vt.err);exit(1);}}{n}=_vt.{f};}}",
+                            c=c_ty, n=name, e=inner_c, f=field
+                        ));
+                    }
+                    return;
                 }
 
                 // Special case: array literal → VArray
@@ -773,7 +807,31 @@ impl Emitter {
                 }
             }
 
+            Expr::Try(inner) => {
+                let e = self.emit_expr(inner);
+                if self.in_result_fn {
+                    format!("({{VResult _vt={e};if(!_vt.ok){{return _vt;}}_vt.ival;}})", e=e)
+                } else {
+                    format!("({{VResult _vt={e};if(!_vt.ok){{fprintf(stderr,\"error: %s\\n\",_vt.err);exit(1);}}_vt.ival;}})", e=e)
+                }
+            }
+
             Expr::Call { name, args } => {
+                // Ok(val) — Result constructor
+                if name == "Ok" && args.len() == 1 {
+                    let a = self.emit_expr(&args[0]);
+                    let ty = self.infer_type(&args[0]);
+                    return match ty.as_str() {
+                        "const char*" => format!("_volt_ok_s({})", a),
+                        "double" | "float" => format!("_volt_ok_f({})", a),
+                        _ => format!("_volt_ok_i({})", a),
+                    };
+                }
+                // Err(msg) — Result error constructor
+                if name == "Err" && args.len() == 1 {
+                    let a = self.emit_expr(&args[0]);
+                    return format!("_volt_err({})", a);
+                }
                 // Built-in print — accepts any type, auto-converts
                 if name == "print" {
                     if args.is_empty() {
@@ -816,6 +874,32 @@ impl Emitter {
             }
 
             Expr::MethodCall { target, method, args } => {
+                if method == "unwrap" && args.is_empty() {
+                    let t = self.emit_expr(target);
+                    return format!(
+                        "({{VResult _vt={t};if(!_vt.ok){{fprintf(stderr,\"error: %s\\n\",_vt.err);exit(1);}}_vt.ival;}})",
+                        t=t
+                    );
+                }
+                if method == "unwrap_str" && args.is_empty() {
+                    let t = self.emit_expr(target);
+                    return format!(
+                        "({{VResult _vt={t};if(!_vt.ok){{fprintf(stderr,\"error: %s\\n\",_vt.err);exit(1);}}_vt.sval;}})",
+                        t=t
+                    );
+                }
+                if method == "is_ok" && args.is_empty() {
+                    let t = self.emit_expr(target);
+                    return format!("({}.ok)", t);
+                }
+                if method == "is_err" && args.is_empty() {
+                    let t = self.emit_expr(target);
+                    return format!("(!{}.ok)", t);
+                }
+                if method == "unwrap_err" && args.is_empty() {
+                    let t = self.emit_expr(target);
+                    return format!("({}.err)", t);
+                }
                 let t = self.emit_expr(target);
                 let a: Vec<String> = args.iter().map(|a| self.emit_expr(a)).collect();
                 format!("{}.{}({})", t, method, a.join(", "))

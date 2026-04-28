@@ -10,6 +10,7 @@ pub enum VType {
     Int, Float, Bool, Str, Nil, Ptr,
     Struct(String),
     Enum(String),
+    Result,
     Unknown,
 }
 
@@ -18,11 +19,12 @@ impl VType {
         match s {
             "i8"|"i16"|"i32"|"i64"|"u8"|"u16"|"u32"|"u64"|"int" => VType::Int,
             "f32"|"f64"|"float" => VType::Float,
-            "bool"  => VType::Bool,
-            "str"   => VType::Str,
-            "nil"   => VType::Nil,
-            "ptr"   => VType::Ptr,
-            other   => VType::Struct(other.to_string()),
+            "bool"   => VType::Bool,
+            "str"    => VType::Str,
+            "nil"    => VType::Nil,
+            "ptr"    => VType::Ptr,
+            "Result" => VType::Result,
+            other    => VType::Struct(other.to_string()),
         }
     }
     pub fn to_display(&self) -> &str {
@@ -35,6 +37,7 @@ impl VType {
             VType::Ptr       => "ptr",
             VType::Struct(s) => s,
             VType::Enum(s)   => s,
+            VType::Result    => "Result",
             VType::Unknown   => "?",
         }
     }
@@ -83,6 +86,8 @@ impl Checker {
             current_line: 0,
         };
         // Register built-in functions
+        c.fn_types.insert("Ok".into(),            VType::Result);
+        c.fn_types.insert("Err".into(),           VType::Result);
         c.fn_types.insert("print".into(),        VType::Nil);
         c.fn_types.insert("input".into(),        VType::Str);
         c.fn_types.insert("int_to_str".into(),   VType::Str);
@@ -475,6 +480,18 @@ impl Checker {
             Expr::StructLit { name, fields } => {
                 for (_, v) in fields { self.check_expr(v); }
                 VType::Struct(name.clone())
+            }
+
+            Expr::Try(inner) => {
+                let t = self.check_expr(inner);
+                if t != VType::Result && t != VType::Unknown {
+                    self.errors.push(SemaError::new(
+                        format!("'?' applied to non-Result type '{}'", t.to_display()),
+                        self.current_line,
+                        "only use '?' on expressions that return Result",
+                    ));
+                }
+                VType::Unknown
             }
 
             _ => { VType::Unknown }

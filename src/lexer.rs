@@ -26,6 +26,7 @@ pub enum TokenKind {
     PlusEq, MinusEq, StarEq, SlashEq,
     Ampersand, Pipe, Caret, Tilde,
     ShiftL, ShiftR,
+    Question,
 
     // Delimiters
     LParen, RParen, LBrace, RBrace,
@@ -258,6 +259,7 @@ impl<'a> Lexer<'a> {
             b'='  => { if self.eat_if(b'=') { TokenKind::EqEq }
                        else if self.eat_if(b'>') { TokenKind::FatArrow }
                        else { TokenKind::Eq } }
+            b'?'  => TokenKind::Question,
             b'!'  => { if self.eat_if(b'=') { TokenKind::BangEq }
                        else { return Err(LexError::new("expected '!='", line, col, &self.lines)); } }
             b'<'  => { if self.eat_if(b'=') { TokenKind::LtEq   }

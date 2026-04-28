@@ -59,6 +59,9 @@ pub enum Expr {
         target: Box<Expr>,
         field:  String,
     },
+
+    // expr? — propagate error early
+    Try(Box<Expr>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
