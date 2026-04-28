@@ -93,6 +93,23 @@ impl Emitter {
             }
         }
 
+        // Constants (static const)
+        let mut had_const = false;
+        for stmt in &prog.stmts {
+            if let Stmt::Const { name, ty, value, .. } = stmt {
+                let c_ty = if let Some(t) = ty { self.resolve_ty(Some(t)) }
+                           else { self.infer_type(value) };
+                let val = self.emit_expr(value);
+                self.line(&format!("static const {} {} = {};", c_ty, name, val));
+                // Register so other code can reference it
+                if let Some(t) = ty {
+                    self.var_types.insert(name.clone(), t.clone());
+                }
+                had_const = true;
+            }
+        }
+        if had_const { self.line(""); }
+
         // Struct definitions
         for stmt in &prog.stmts {
             if let Stmt::StructDef(s) = stmt { self.emit_struct_def(s); }
@@ -139,7 +156,8 @@ impl Emitter {
         // Top-level → main()
         let top: Vec<&Stmt> = prog.stmts.iter().filter(|s|
             !matches!(s, Stmt::FnDef(_)|Stmt::ExternBlock(_)|Stmt::DeviceBlock(_)
-                       |Stmt::StructDef(_)|Stmt::PackedStructDef(_)|Stmt::EnumDef(_))
+                       |Stmt::StructDef(_)|Stmt::PackedStructDef(_)|Stmt::EnumDef(_)
+                       |Stmt::Const { .. })
         ).collect();
 
         if !top.is_empty() {
@@ -338,6 +356,12 @@ impl Emitter {
             Some("str")               => "const char*".into(),
             Some("ptr")               => "void*".into(),
             Some("Result")            => "VResult".into(),
+            Some(arr) if arr.starts_with('[') && arr.contains(';') => {
+                // Fixed-size array [i64;8] — decays to pointer when used as param type
+                let inner = &arr[1..arr.len()-1];
+                let elem  = inner.split(';').next().unwrap_or("i64").trim();
+                format!("{}*", self.resolve_ty(Some(elem)))
+            }
             Some(arr) if arr.starts_with('[') => "VArray".into(),
             Some(name) if self.struct_names.contains(name) => name.to_string(),
             Some(other)               => other.to_string(), // pass through unknown
@@ -525,6 +549,20 @@ impl Emitter {
                     }
                 }
 
+                // Special case: fixed-size array [T; N]
+                if let Some(ty_str) = ty {
+                    if ty_str.starts_with('[') && ty_str.contains(';') {
+                        let inner  = &ty_str[1..ty_str.len()-1];
+                        let parts: Vec<&str> = inner.splitn(2, ';').collect();
+                        let elem   = parts[0].trim();
+                        let size   = parts.get(1).unwrap_or(&"0").trim();
+                        let elem_c = self.resolve_ty(Some(elem));
+                        self.iline(&format!("{} {}[{}] = {{0}};", elem_c, name, size));
+                        self.var_types.insert(name.clone(), ty_str.clone());
+                        return;
+                    }
+                }
+
                 // Special case: expr? in let → emit try-unwrap
                 if let Expr::Try(inner) = value {
                     let inner_c = self.emit_expr(inner);
@@ -689,7 +727,8 @@ impl Emitter {
             }
 
             Stmt::FnDef(_) | Stmt::ExternBlock(_) | Stmt::DeviceBlock(_)
-            | Stmt::StructDef(_) | Stmt::PackedStructDef(_) | Stmt::EnumDef(_) => {}
+            | Stmt::StructDef(_) | Stmt::PackedStructDef(_) | Stmt::EnumDef(_)
+            | Stmt::Const { .. } => {}
         }
     }
 
@@ -982,13 +1021,17 @@ impl Emitter {
             Expr::Index { target, index } => {
                 let t = self.emit_expr(target);
                 let i = self.emit_expr(index);
-                let elem_ty = if let Expr::Ident(arr_name) = target.as_ref() {
+                let arr_ty = if let Expr::Ident(arr_name) = target.as_ref() {
                     self.var_types.get(arr_name.as_str()).map(|s| s.as_str()).unwrap_or("")
                 } else { "" };
-                match elem_ty {
-                    "[str]"                            => format!("AGET_STR({}, {})", t, i),
-                    "[f64]" | "[f32]" | "[float]"      => format!("AGET_FLT({}, {})", t, i),
-                    _                                  => format!("AGET_INT({}, {})", t, i),
+                // Fixed-size stack array → direct C index
+                if arr_ty.starts_with('[') && arr_ty.contains(';') {
+                    return format!("{}[{}]", t, i);
+                }
+                match arr_ty {
+                    "[str]"                       => format!("AGET_STR({}, {})", t, i),
+                    "[f64]" | "[f32]" | "[float]" => format!("AGET_FLT({}, {})", t, i),
+                    _                             => format!("AGET_INT({}, {})", t, i),
                 }
             }
         }

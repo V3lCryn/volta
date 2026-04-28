@@ -16,7 +16,7 @@ pub enum TokenKind {
     End, Do, And, Or, Not, Nil,
     Break, Continue, Struct,
     Extern, Device, Import, As, Pub,
-    Enum, Match, Packed,
+    Enum, Match, Packed, Const,
 
     // Operators
     Plus, Minus, Star, Slash, Percent,
@@ -218,6 +218,7 @@ impl<'a> Lexer<'a> {
             "enum"     => TokenKind::Enum,
             "match"    => TokenKind::Match,
             "packed"   => TokenKind::Packed,
+            "const"    => TokenKind::Const,
             _          => TokenKind::Ident(s),
         }
     }

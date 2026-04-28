@@ -18,7 +18,12 @@ pub enum VType {
 impl VType {
     pub fn from_str(s: &str) -> Self {
         if s.starts_with('[') && s.ends_with(']') {
-            return VType::Array(s[1..s.len()-1].to_string());
+            let inner = &s[1..s.len()-1];
+            if let Some(semi) = inner.find(';') {
+                // Fixed-size array [i64;8] — track element type
+                return VType::Array(inner[..semi].trim().to_string());
+            }
+            return VType::Array(inner.to_string());
         }
         match s {
             "i8"|"i16"|"i32"|"i64"|"u8"|"u16"|"u32"|"u64"|"int" => VType::Int,
@@ -70,13 +75,15 @@ impl std::fmt::Display for SemaError {
 impl std::error::Error for SemaError {}
 
 pub struct Checker {
-    scopes:       Vec<HashMap<String, VType>>,
-    fn_types:     HashMap<String, VType>,
-    structs:      HashMap<String, Vec<(String, VType)>>,
-    enums:        HashMap<String, Vec<String>>,
-    pub errors:   Vec<SemaError>,
-    pub warnings: Vec<SemaError>,
-    current_line: usize,
+    scopes:           Vec<HashMap<String, VType>>,
+    fn_types:         HashMap<String, VType>,
+    fn_param_counts:  HashMap<String, usize>,
+    structs:          HashMap<String, Vec<(String, VType)>>,
+    enums:            HashMap<String, Vec<String>>,
+    pub errors:       Vec<SemaError>,
+    pub warnings:     Vec<SemaError>,
+    current_line:     usize,
+    current_fn_ret:   Option<VType>,
 }
 
 impl Checker {
@@ -84,11 +91,13 @@ impl Checker {
         let mut c = Checker {
             scopes: vec![HashMap::new()],
             fn_types: HashMap::new(),
+            fn_param_counts: HashMap::new(),
             structs: HashMap::new(),
             enums: HashMap::new(),
             errors: Vec::new(),
             warnings: Vec::new(),
             current_line: 0,
+            current_fn_ret: None,
         };
         // Register built-in functions
         c.fn_types.insert("Ok".into(),            VType::Result);
@@ -206,9 +215,25 @@ impl Checker {
         // First pass: register all type signatures
         for stmt in &prog.stmts {
             match stmt {
+                Stmt::Const { name, ty, value, line } => {
+                    let val_ty = if let Some(ann) = ty {
+                        VType::from_str(ann)
+                    } else {
+                        match value {
+                            Expr::Integer(_)   => VType::Int,
+                            Expr::Float(_)     => VType::Float,
+                            Expr::Bool(_)      => VType::Bool,
+                            Expr::StringLit(_) => VType::Str,
+                            _                  => VType::Unknown,
+                        }
+                    };
+                    self.current_line = *line;
+                    self.define(name, val_ty);
+                }
                 Stmt::FnDef(f) => {
                     let ret = f.ret_ty.as_deref().map(VType::from_str).unwrap_or(VType::Nil);
                     self.fn_types.insert(f.name.clone(), ret);
+                    self.fn_param_counts.insert(f.name.clone(), f.params.len());
                 }
                 Stmt::StructDef(s) => {
                     let fields = s.fields.iter()
@@ -300,14 +325,35 @@ impl Checker {
                     }
                 }
             }
+            Stmt::Const { name, ty, value, line } => {
+                self.current_line = *line;
+                let val_ty = self.check_expr(value);
+                if let Some(ann) = ty {
+                    let ann_ty = VType::from_str(ann);
+                    if ann_ty != VType::Unknown && val_ty != VType::Unknown
+                       && ann_ty != val_ty && val_ty != VType::Nil {
+                        let ok = matches!((&ann_ty, &val_ty), (VType::Float, VType::Int) | (VType::Int, VType::Float));
+                        if !ok {
+                            self.errors.push(SemaError::new(
+                                format!("const '{}': type '{}' doesn't match value type '{}'",
+                                    name, ann_ty.to_display(), val_ty.to_display()),
+                                self.current_line, "change the annotation or the value",
+                            ));
+                        }
+                    }
+                }
+            }
             Stmt::FnDef(f) => {
                 self.current_line = f.line;
                 self.push_scope();
+                let prev_ret = self.current_fn_ret.take();
+                self.current_fn_ret = f.ret_ty.as_deref().map(VType::from_str);
                 for p in &f.params {
                     let ty = p.ty.as_deref().map(VType::from_str).unwrap_or(VType::Unknown);
                     self.define(&p.name, ty);
                 }
                 for s in &f.body { self.check_stmt(s); }
+                self.current_fn_ret = prev_ret;
                 self.pop_scope();
             }
             Stmt::If { cond, then_body, else_ifs, else_body, line } => {
@@ -352,7 +398,26 @@ impl Checker {
                 self.pop_scope();
             }
             Stmt::ExprStmt(e) => { self.check_expr(e); }
-            Stmt::Return(Some(e)) => { self.check_expr(e); }
+            Stmt::Return(Some(e)) => {
+                let ret_ty = self.check_expr(e);
+                if let Some(expected) = &self.current_fn_ret.clone() {
+                    if ret_ty != VType::Unknown && *expected != VType::Unknown
+                       && ret_ty != *expected {
+                        let ok = matches!((expected, &ret_ty),
+                            (VType::Float, VType::Int) | (VType::Int, VType::Float) |
+                            (VType::Result, _) | (_, VType::Result));
+                        if !ok {
+                            self.errors.push(SemaError::new(
+                                format!("return type mismatch: expected '{}', got '{}'",
+                                    expected.to_display(), ret_ty.to_display()),
+                                self.current_line,
+                                format!("function declared to return '{}'", expected.to_display()),
+                            ));
+                        }
+                    }
+                }
+            }
+            Stmt::Return(None) => {}
             Stmt::EnumDef(_) | Stmt::PackedStructDef(_) => {} // registered in first pass
             Stmt::Match { expr, arms, line } => {
                 self.current_line = *line;
@@ -461,6 +526,17 @@ impl Checker {
                     return VType::Nil;
                 }
                 for a in args { self.check_expr(a); }
+                // Validate arg count for user-defined functions
+                if let Some(&expected) = self.fn_param_counts.get(name) {
+                    if args.len() != expected {
+                        self.errors.push(SemaError::new(
+                            format!("'{}' expects {} argument(s), got {}",
+                                name, expected, args.len()),
+                            self.current_line,
+                            format!("check the definition of '{}'", name),
+                        ));
+                    }
+                }
                 if let Some(t) = self.fn_types.get(name) {
                     t.clone()
                 } else {

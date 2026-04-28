@@ -132,6 +132,13 @@ pub enum Stmt {
         line: usize,
     },
 
+    Const {
+        name:  String,
+        ty:    Option<String>,
+        value: Expr,
+        line:  usize,
+    },
+
     ExprStmt(Expr),
     FnDef(FnDef),
     StructDef(StructDef),

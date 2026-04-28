@@ -80,14 +80,35 @@ impl Parser {
         })}
     }
 
-    // Parse a type name: either a plain ident or [ident] for typed arrays
+    // Parse a type name:
+    //   ident          → plain type
+    //   [ident]        → dynamic typed array
+    //   [ident; N]     → fixed-size stack array
     fn parse_type(&mut self) -> PR<String> {
         self.skip_newlines();
         if self.check(&TokenKind::LBracket) {
             self.advance();
             let elem = self.expect_ident()?;
-            self.expect(&TokenKind::RBracket)?;
-            Ok(format!("[{}]", elem))
+            self.skip_newlines();
+            if self.eat(&TokenKind::Semicolon) {
+                // fixed-size: [i64; 8]
+                self.skip_newlines();
+                let size = if let TokenKind::Integer(n) = self.peek().clone() {
+                    self.advance(); n as usize
+                } else {
+                    return Err(ParseError {
+                        msg:  "expected array size (integer)".into(),
+                        line: self.peek_line(),
+                        col:  self.peek_col(),
+                    });
+                };
+                self.expect(&TokenKind::RBracket)?;
+                Ok(format!("[{};{}]", elem, size))
+            } else {
+                // dynamic: [i64]
+                self.expect(&TokenKind::RBracket)?;
+                Ok(format!("[{}]", elem))
+            }
         } else {
             self.expect_ident()
         }
@@ -146,6 +167,7 @@ impl Parser {
                 return self.parse_stmt(); // parse next statement
             }
             TokenKind::Let      => self.parse_let(),
+            TokenKind::Const    => self.parse_const(),
             TokenKind::Return   => self.parse_return(),
             TokenKind::Break    => { self.advance(); Ok(Stmt::Break) }
             TokenKind::Continue => { self.advance(); Ok(Stmt::Continue) }
@@ -161,6 +183,16 @@ impl Parser {
             TokenKind::At       => self.parse_at_block(),
             _                   => self.parse_expr_stmt(),
         }
+    }
+
+    fn parse_const(&mut self) -> PR<Stmt> {
+        let line = self.peek_line();
+        self.advance();
+        let name = self.expect_ident()?;
+        let ty = if self.eat(&TokenKind::Colon) { Some(self.parse_type()?) } else { None };
+        self.expect(&TokenKind::Eq)?;
+        let value = self.parse_expr()?;
+        Ok(Stmt::Const { name, ty, value, line })
     }
 
     fn parse_let(&mut self) -> PR<Stmt> {
