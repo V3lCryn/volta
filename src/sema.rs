@@ -216,6 +216,12 @@ impl Checker {
                         .collect();
                     self.structs.insert(s.name.clone(), fields);
                 }
+                Stmt::PackedStructDef(ps) => {
+                    let fields = ps.fields.iter()
+                        .map(|(n, _)| (n.clone(), VType::Int))
+                        .collect();
+                    self.structs.insert(ps.name.clone(), fields);
+                }
                 Stmt::EnumDef(e) => {
                     self.enums.insert(e.name.clone(), e.variants.clone());
                 }
@@ -347,7 +353,7 @@ impl Checker {
             }
             Stmt::ExprStmt(e) => { self.check_expr(e); }
             Stmt::Return(Some(e)) => { self.check_expr(e); }
-            Stmt::EnumDef(_) => {} // registered in first pass
+            Stmt::EnumDef(_) | Stmt::PackedStructDef(_) => {} // registered in first pass
             Stmt::Match { expr, arms, line } => {
                 self.current_line = *line;
                 let match_ty = self.check_expr(expr);

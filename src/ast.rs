@@ -135,6 +135,7 @@ pub enum Stmt {
     ExprStmt(Expr),
     FnDef(FnDef),
     StructDef(StructDef),
+    PackedStructDef(PackedStructDef),
     EnumDef(EnumDef),
     ExternBlock(ExternBlock),
     DeviceBlock(DeviceBlock),
@@ -172,6 +173,13 @@ pub struct Param {
 pub struct StructDef {
     pub name:   String,
     pub fields: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PackedStructDef {
+    pub name:    String,
+    pub base_ty: String,              // backing integer type: u8/u16/u32/u64
+    pub fields:  Vec<(String, u8)>,   // (field_name, bit_width)
 }
 
 #[derive(Debug, Clone)]

@@ -69,6 +69,13 @@ impl Emitter {
                     self.struct_defs.insert(s.name.clone(), s.fields.clone());
                     self.struct_names.insert(s.name.clone());
                 }
+                Stmt::PackedStructDef(ps) => {
+                    let fields: Vec<(String, String)> = ps.fields.iter()
+                        .map(|(n, _)| (n.clone(), ps.base_ty.clone()))
+                        .collect();
+                    self.struct_defs.insert(ps.name.clone(), fields);
+                    self.struct_names.insert(ps.name.clone());
+                }
                 Stmt::EnumDef(e) => {
                     self.enum_defs.insert(e.name.clone(), e.variants.clone());
                 }
@@ -89,6 +96,11 @@ impl Emitter {
         // Struct definitions
         for stmt in &prog.stmts {
             if let Stmt::StructDef(s) = stmt { self.emit_struct_def(s); }
+        }
+
+        // Packed struct definitions
+        for stmt in &prog.stmts {
+            if let Stmt::PackedStructDef(ps) = stmt { self.emit_packed_struct_def(ps); }
         }
 
         // Enum definitions
@@ -126,7 +138,8 @@ impl Emitter {
 
         // Top-level → main()
         let top: Vec<&Stmt> = prog.stmts.iter().filter(|s|
-            !matches!(s, Stmt::FnDef(_)|Stmt::ExternBlock(_)|Stmt::DeviceBlock(_)|Stmt::StructDef(_)|Stmt::EnumDef(_))
+            !matches!(s, Stmt::FnDef(_)|Stmt::ExternBlock(_)|Stmt::DeviceBlock(_)
+                       |Stmt::StructDef(_)|Stmt::PackedStructDef(_)|Stmt::EnumDef(_))
         ).collect();
 
         if !top.is_empty() {
@@ -400,6 +413,27 @@ impl Emitter {
         self.line(&format!("}} {};\n", s.name));
     }
 
+    // ── Packed struct ─────────────────────────────────────────────────────────
+
+    fn emit_packed_struct_def(&mut self, ps: &PackedStructDef) {
+        let base_cty = match ps.base_ty.as_str() {
+            "u8"  => "uint8_t",
+            "u16" => "uint16_t",
+            "u32" => "uint32_t",
+            "u64" => "uint64_t",
+            "i8"  => "int8_t",
+            "i16" => "int16_t",
+            "i32" => "int32_t",
+            "i64" => "int64_t",
+            other => other,
+        };
+        self.line(&format!("typedef struct __attribute__((packed)) {{"));
+        for (fname, bits) in &ps.fields {
+            self.line(&format!("    {} {} : {};", base_cty, fname, bits));
+        }
+        self.line(&format!("}} {};\n", ps.name));
+    }
+
     // ── Enum ──────────────────────────────────────────────────────────────────
 
     fn emit_enum_def(&mut self, e: &EnumDef) {
@@ -655,7 +689,7 @@ impl Emitter {
             }
 
             Stmt::FnDef(_) | Stmt::ExternBlock(_) | Stmt::DeviceBlock(_)
-            | Stmt::StructDef(_) | Stmt::EnumDef(_) => {}
+            | Stmt::StructDef(_) | Stmt::PackedStructDef(_) | Stmt::EnumDef(_) => {}
         }
     }
 

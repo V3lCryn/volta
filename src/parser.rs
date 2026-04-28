@@ -155,6 +155,7 @@ impl Parser {
             TokenKind::Fn      => self.parse_fn_def(false),
             TokenKind::Pub      => { self.advance(); self.parse_fn_def(true) }
             TokenKind::Struct   => self.parse_struct_def(),
+            TokenKind::Packed   => self.parse_packed_struct_def(),
             TokenKind::Enum     => self.parse_enum_def(),
             TokenKind::Match    => self.parse_match(),
             TokenKind::At       => self.parse_at_block(),
@@ -291,6 +292,34 @@ impl Parser {
             if !self.eat(&TokenKind::Comma) { break; }
         }
         Ok(params)
+    }
+
+    fn parse_packed_struct_def(&mut self) -> PR<Stmt> {
+        self.advance(); // eat 'packed'
+        self.expect(&TokenKind::Struct)?;
+        let name = self.expect_ident()?;
+        self.expect(&TokenKind::Colon)?;
+        let base_ty = self.expect_ident()?;
+        let mut fields = Vec::new();
+        loop {
+            self.skip_newlines();
+            if matches!(self.peek(), TokenKind::End | TokenKind::Eof) { break; }
+            let fname = self.expect_ident()?;
+            self.expect(&TokenKind::Colon)?;
+            let bits = if let TokenKind::Integer(n) = self.peek().clone() {
+                self.advance();
+                n as u8
+            } else {
+                return Err(ParseError {
+                    msg: "expected bit width (integer)".into(),
+                    line: self.peek_line(),
+                    col:  self.peek_col(),
+                });
+            };
+            fields.push((fname, bits));
+        }
+        self.expect(&TokenKind::End)?;
+        Ok(Stmt::PackedStructDef(PackedStructDef { name, base_ty, fields }))
     }
 
     fn parse_enum_def(&mut self) -> PR<Stmt> {
