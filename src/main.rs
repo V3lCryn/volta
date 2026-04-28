@@ -1,4 +1,4 @@
-// volta/src/main.rs — Volta compiler v0.2.0
+// volta/src/main.rs — Volta compiler v0.3.0
 
 mod error;
 mod lexer;
@@ -14,7 +14,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 
-const VERSION: &str = "0.2.0";
+const VERSION: &str = "0.3.0";
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -82,6 +82,8 @@ fn cmd_new(args: &[String]) {
 r#"-- {name} — a Volta project
 -- run: volta main.vlt
 
+import "lib/utils"
+
 fn greet(who: str) -> str
   return "Hello, {{who}}!"
 end
@@ -89,7 +91,7 @@ end
 let name = "{name}"
 let msg = greet(name)
 print(msg)
-print("Built with Volta -- github.com/V3lCryn/volta")
+print("Built with Volta — github.com/V3lCryn/volta")
 "#, name=name));
 
     write(dir.join("lib").join("utils.vlt"),
@@ -163,8 +165,7 @@ fn try_run_file(input_path: &Path, extra_args: &[String], do_run: bool) -> Resul
     let c_path   = dir.join(format!("{}.c",  stem));
     let bin_path = dir.join(&stem);
 
-    let mut visited = HashSet::new();
-    let c_code = compile_file(input_path, &dir, &mut visited)?;
+    let c_code = compile_file(input_path)?;
 
     fs::write(&c_path, &c_code).map_err(|e| VoltaError::Io {
         path:   c_path.display().to_string(),
@@ -223,58 +224,11 @@ fn try_run_file(input_path: &Path, extra_args: &[String], do_run: bool) -> Resul
 
 // ── Module resolution ─────────────────────────────────────────────────────────
 
-fn compile_file(
-    path:     &Path,
-    base_dir: &Path,
-    visited:  &mut HashSet<PathBuf>,
-) -> Result<String, VoltaError> {
-    let canonical = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    if visited.contains(&canonical) { return Ok(String::new()); }
-    visited.insert(canonical);
-
+fn compile_file(path: &Path) -> Result<String, VoltaError> {
     let filename = path.to_string_lossy().into_owned();
-
-    let src = fs::read_to_string(path).map_err(|e| VoltaError::Io {
-        path:   filename.clone(),
-        detail: e.to_string(),
-    })?;
-
-    let (imports, clean_src) = extract_imports(&src);
-
-    let mut imported: Vec<ast::Stmt> = Vec::new();
-    for imp in &imports {
-        let imp_path = resolve_import(imp, path);
-        if !imp_path.exists() {
-            return Err(VoltaError::Module {
-                name:     imp.clone(),
-                searched: imp_path.display().to_string(),
-            });
-        }
-        let imp_src = fs::read_to_string(&imp_path).map_err(|e| VoltaError::Io {
-            path:   imp_path.display().to_string(),
-            detail: e.to_string(),
-        })?;
-        let (_, imp_clean) = extract_imports(&imp_src);
-        let imp_file = imp_path.to_string_lossy().into_owned();
-        let imp_dir  = imp_path.parent().unwrap_or(base_dir);
-        let toks = lex_source(&imp_clean, &imp_file)?;
-        let prog = parse_tokens(toks, &imp_file)?;
-        for stmt in prog.stmts {
-            match &stmt {
-                ast::Stmt::FnDef(_) | ast::Stmt::StructDef(_) |
-                ast::Stmt::ExternBlock(_) | ast::Stmt::DeviceBlock(_) => {
-                    imported.push(stmt);
-                }
-                _ => {}
-            }
-        }
-        compile_file(&imp_path, imp_dir, visited)?;
-    }
-
-    let toks = lex_source(&clean_src, &filename)?;
-    let mut prog = parse_tokens(toks, &filename)?;
-    imported.append(&mut prog.stmts);
-    prog.stmts = imported;
+    let mut visited = HashSet::new();
+    let all_stmts = collect_stmts(path, &mut visited)?;
+    let prog = ast::Program { stmts: all_stmts };
 
     let mut checker = sema::Checker::new();
     checker.check_program(&prog);
@@ -293,6 +247,56 @@ fn compile_file(
     emit::Emitter::new()
         .emit_program(&prog)
         .map_err(|e| VoltaError::Emit { msg: e.msg })
+}
+
+// Recursively collect all stmts from a file and its transitive imports.
+// Imported files contribute only definitions (no top-level code).
+fn collect_stmts(
+    path:    &Path,
+    visited: &mut HashSet<PathBuf>,
+) -> Result<Vec<ast::Stmt>, VoltaError> {
+    let canonical = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    if visited.contains(&canonical) { return Ok(Vec::new()); }
+    visited.insert(canonical.clone());
+
+    let filename = path.to_string_lossy().into_owned();
+    let src = fs::read_to_string(path).map_err(|e| VoltaError::Io {
+        path:   filename.clone(),
+        detail: e.to_string(),
+    })?;
+
+    let (imports, clean_src) = extract_imports(&src);
+    let mut all_stmts: Vec<ast::Stmt> = Vec::new();
+
+    for imp in &imports {
+        let imp_path = resolve_import(imp, path);
+        if !imp_path.exists() {
+            return Err(VoltaError::Module {
+                name:     imp.clone(),
+                searched: imp_path.display().to_string(),
+            });
+        }
+        // Recursively collect transitive imports from this module
+        let imp_stmts = collect_stmts(&imp_path, visited)?;
+        // Only definitions cross module boundaries — no top-level code
+        for stmt in imp_stmts {
+            match &stmt {
+                ast::Stmt::FnDef(_)
+                | ast::Stmt::StructDef(_)
+                | ast::Stmt::PackedStructDef(_)
+                | ast::Stmt::EnumDef(_)
+                | ast::Stmt::ExternBlock(_)
+                | ast::Stmt::DeviceBlock(_) => { all_stmts.push(stmt); }
+                _ => {}
+            }
+        }
+    }
+
+    // Parse this file and append its stmts after the imports
+    let toks = lex_source(&clean_src, &filename)?;
+    let prog  = parse_tokens(toks, &filename)?;
+    all_stmts.extend(prog.stmts);
+    Ok(all_stmts)
 }
 
 fn extract_imports(src: &str) -> (Vec<String>, String) {
@@ -314,15 +318,31 @@ fn extract_imports(src: &str) -> (Vec<String>, String) {
 
 fn resolve_import(name: &str, current_file: &Path) -> PathBuf {
     let current_dir = current_file.parent().unwrap_or(Path::new("."));
+
+    // 1. Relative to the importing file
     let rel = current_dir.join(format!("{}.vlt", name));
-    if let Ok(c) = fs::canonicalize(&rel) { if c.exists() { return c; } }
     if rel.exists() { return rel; }
+
+    // 2. lib/ subdirectory next to the importing file
+    let lib_rel = current_dir.join("lib").join(format!("{}.vlt", name));
+    if lib_rel.exists() { return lib_rel; }
+
+    // 3. Current working directory
     let cwd = PathBuf::from(format!("{}.vlt", name));
     if cwd.exists() { return cwd; }
+
+    // 4. ~/.volta/lib/
     if let Ok(home) = env::var("HOME") {
-        let stdlib = PathBuf::from(home).join(".volta").join("lib").join(format!("{}.vlt", name));
+        let stdlib = PathBuf::from(&home).join(".volta").join("lib").join(format!("{}.vlt", name));
         if stdlib.exists() { return stdlib; }
     }
+    // 5. VOLTA_LIB env var (for custom stdlib locations)
+    if let Ok(lib_dir) = env::var("VOLTA_LIB") {
+        let p = PathBuf::from(&lib_dir).join(format!("{}.vlt", name));
+        if p.exists() { return p; }
+    }
+
+    // Not found — return the relative path so the caller can report a good error
     rel
 }
 
