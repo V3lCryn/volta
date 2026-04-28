@@ -60,12 +60,12 @@ impl std::fmt::Display for SemaError {
 impl std::error::Error for SemaError {}
 
 pub struct Checker {
-    // stack of scopes: each is a map from name -> type 
-    scopes:   Vec<HashMap<String, VType>>,
-    fn_types: HashMap<String, VType>,
-    structs:  HashMap<String, Vec<(String, VType)>>,
-    pub errors: Vec<SemaError>,
+    scopes:       Vec<HashMap<String, VType>>,
+    fn_types:     HashMap<String, VType>,
+    structs:      HashMap<String, Vec<(String, VType)>>,
+    pub errors:   Vec<SemaError>,
     pub warnings: Vec<SemaError>,
+    current_line: usize,
 }
 
 impl Checker {
@@ -76,6 +76,7 @@ impl Checker {
             structs: HashMap::new(),
             errors: Vec::new(),
             warnings: Vec::new(),
+            current_line: 0,
         };
         // Register built-in functions
         c.fn_types.insert("print".into(),        VType::Nil);
@@ -232,20 +233,20 @@ impl Checker {
 
     fn check_stmt(&mut self, stmt: &Stmt) {
         match stmt {
-            Stmt::Let { name, ty, value } => {
+            Stmt::Let { name, ty, value, line } => {
+                self.current_line = *line;
                 let val_ty = self.check_expr(value);
                 if let Some(ann) = ty {
                     let ann_ty = VType::from_str(ann);
                     if ann_ty != VType::Unknown && val_ty != VType::Unknown
                        && ann_ty != val_ty && val_ty != VType::Nil {
-                        // Allow int -> float coercion
                         let ok = matches!((&ann_ty, &val_ty), (VType::Float, VType::Int) | (VType::Int, VType::Float));
                         if !ok {
                             self.errors.push(SemaError::new(
                                 format!("type mismatch: '{}' declared as '{}' but got '{}'",
                                     name, ann_ty.to_display(), val_ty.to_display()),
-                                0,
-                                format!("change the type annotation or the value"),
+                                self.current_line,
+                                "change the type annotation or the value",
                             ));
                         }
                     }
@@ -254,17 +255,17 @@ impl Checker {
                     self.define(name, val_ty);
                 }
             }
-            Stmt::Assign { target, value } => {
+            Stmt::Assign { target, value, line } => {
+                self.current_line = *line;
                 let val_ty = self.check_expr(value);
                 if let AssignTarget::Ident(name) = target {
                     if self.lookup(name).is_none() {
                         self.errors.push(SemaError::new(
                             format!("assignment to undefined variable '{}'", name),
-                            0,
+                            self.current_line,
                             format!("declare it first with: let {} = ...", name),
                         ));
                     }
-                    // Update type in scope
                     for scope in self.scopes.iter_mut().rev() {
                         if scope.contains_key(name) {
                             scope.insert(name.clone(), val_ty.clone());
@@ -274,6 +275,7 @@ impl Checker {
                 }
             }
             Stmt::FnDef(f) => {
+                self.current_line = f.line;
                 self.push_scope();
                 for p in &f.params {
                     let ty = p.ty.as_deref().map(VType::from_str).unwrap_or(VType::Unknown);
@@ -282,12 +284,14 @@ impl Checker {
                 for s in &f.body { self.check_stmt(s); }
                 self.pop_scope();
             }
-            Stmt::If { cond, then_body, else_ifs, else_body } => {
+            Stmt::If { cond, then_body, else_ifs, else_body, line } => {
+                self.current_line = *line;
                 let cty = self.check_expr(cond);
                 if cty != VType::Bool && cty != VType::Unknown {
                     self.warnings.push(SemaError::new(
                         format!("condition has type '{}', expected 'bool'", cty.to_display()),
-                        0, String::from("wrap in a comparison like: x != 0"),
+                        self.current_line,
+                        "wrap in a comparison like: x != 0",
                     ));
                 }
                 self.push_scope(); for s in then_body { self.check_stmt(s); } self.pop_scope();
@@ -299,18 +303,21 @@ impl Checker {
                     self.push_scope(); for s in eb { self.check_stmt(s); } self.pop_scope();
                 }
             }
-            Stmt::While { cond, body } => {
+            Stmt::While { cond, body, line } => {
+                self.current_line = *line;
                 self.check_expr(cond);
                 self.push_scope(); for s in body { self.check_stmt(s); } self.pop_scope();
             }
-            Stmt::For { var, iter, body } => {
+            Stmt::For { var, iter, body, line } => {
+                self.current_line = *line;
                 self.check_expr(iter);
                 self.push_scope();
                 self.define(var, VType::Int);
                 for s in body { self.check_stmt(s); }
                 self.pop_scope();
             }
-            Stmt::ForIndex { idx, var, iter, body } => {
+            Stmt::ForIndex { idx, var, iter, body, line } => {
+                self.current_line = *line;
                 self.check_expr(iter);
                 self.push_scope();
                 self.define(idx, VType::Int);
@@ -348,7 +355,7 @@ impl Checker {
                 } else {
                     self.errors.push(SemaError::new(
                         format!("undefined variable '{}'", name),
-                        0,
+                        self.current_line,
                         format!("declare it with: let {} = ...", name),
                     ));
                     VType::Unknown
@@ -386,7 +393,7 @@ impl Checker {
                 } else {
                     self.errors.push(SemaError::new(
                         format!("call to undefined function '{}'", name),
-                        0,
+                        self.current_line,
                         format!("define it with: fn {}(...) ... end", name),
                     ));
                     VType::Unknown
@@ -407,7 +414,7 @@ impl Checker {
                         } else {
                             self.errors.push(SemaError::new(
                                 format!("struct '{}' has no field '{}'", sname, field),
-                                0, String::new(),
+                                self.current_line, "",
                             ));
                         }
                     }

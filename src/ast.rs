@@ -85,11 +85,13 @@ pub enum Stmt {
         name:  String,
         ty:    Option<String>,
         value: Expr,
+        line:  usize,
     },
 
     Assign {
         target: AssignTarget,
         value:  Expr,
+        line:   usize,
     },
 
     Return(Option<Expr>),
@@ -101,11 +103,13 @@ pub enum Stmt {
         then_body: Vec<Stmt>,
         else_ifs:  Vec<(Expr, Vec<Stmt>)>,
         else_body: Option<Vec<Stmt>>,
+        line:      usize,
     },
 
     While {
         cond: Expr,
         body: Vec<Stmt>,
+        line: usize,
     },
 
     // for x in iterable
@@ -113,6 +117,7 @@ pub enum Stmt {
         var:  String,
         iter: Expr,
         body: Vec<Stmt>,
+        line: usize,
     },
 
     // for i, x in arr (index + value)
@@ -121,6 +126,7 @@ pub enum Stmt {
         var:  String,
         iter: Expr,
         body: Vec<Stmt>,
+        line: usize,
     },
 
     ExprStmt(Expr),
@@ -144,6 +150,7 @@ pub struct FnDef {
     pub ret_ty:  Option<String>,
     pub body:    Vec<Stmt>,
     pub is_pub:  bool,
+    pub line:    usize,
 }
 
 #[derive(Debug, Clone)]

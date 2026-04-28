@@ -148,12 +148,13 @@ impl Parser {
     }
 
     fn parse_let(&mut self) -> PR<Stmt> {
+        let line = self.peek_line();
         self.advance();
         let name = self.expect_ident()?;
         let ty = if self.eat(&TokenKind::Colon) { Some(self.expect_ident()?) } else { None };
         self.expect(&TokenKind::Eq)?;
         let value = self.parse_expr()?;
-        Ok(Stmt::Let { name, ty, value })
+        Ok(Stmt::Let { name, ty, value, line })
     }
 
     fn parse_return(&mut self) -> PR<Stmt> {
@@ -167,6 +168,7 @@ impl Parser {
     }
 
     fn parse_if(&mut self) -> PR<Stmt> {
+        let line = self.peek_line();
         self.advance();
         let cond = self.parse_expr()?;
         self.expect(&TokenKind::Do)?;
@@ -196,19 +198,21 @@ impl Parser {
             } else { break; }
         }
         self.expect(&TokenKind::End)?;
-        Ok(Stmt::If { cond, then_body, else_ifs, else_body })
+        Ok(Stmt::If { cond, then_body, else_ifs, else_body, line })
     }
 
     fn parse_while(&mut self) -> PR<Stmt> {
+        let line = self.peek_line();
         self.advance();
         let cond = self.parse_expr()?;
         self.expect(&TokenKind::Do)?;
         let body = self.parse_block()?;
         self.expect(&TokenKind::End)?;
-        Ok(Stmt::While { cond, body })
+        Ok(Stmt::While { cond, body, line })
     }
 
     fn parse_for(&mut self) -> PR<Stmt> {
+        let line = self.peek_line();
         self.advance(); // eat 'for'
 
         // Check for "for i, x in ..." (index + value form)
@@ -220,19 +224,19 @@ impl Parser {
             self.expect(&TokenKind::Do)?;
             let body = self.parse_block()?;
             self.expect(&TokenKind::End)?;
-            return Ok(Stmt::ForIndex { idx: first_var, var: second_var, iter, body });
+            return Ok(Stmt::ForIndex { idx: first_var, var: second_var, iter, body, line });
         }
 
         self.expect(&TokenKind::In)?;
-        // Parse range specially: expr..expr or expr..=expr
         let iter = self.parse_range_or_expr()?;
         self.expect(&TokenKind::Do)?;
         let body = self.parse_block()?;
         self.expect(&TokenKind::End)?;
-        Ok(Stmt::For { var: first_var, iter, body })
+        Ok(Stmt::For { var: first_var, iter, body, line })
     }
 
     fn parse_fn_def(&mut self, is_pub: bool) -> PR<Stmt> {
+        let line = self.peek_line();
         self.expect(&TokenKind::Fn)?;
         let name = self.expect_ident()?;
         self.expect(&TokenKind::LParen)?;
@@ -242,7 +246,7 @@ impl Parser {
         self.eat(&TokenKind::Do);
         let body = self.parse_block()?;
         self.expect(&TokenKind::End)?;
-        Ok(Stmt::FnDef(FnDef { name, params, ret_ty, body, is_pub }))
+        Ok(Stmt::FnDef(FnDef { name, params, ret_ty, body, is_pub, line }))
     }
 
     fn parse_struct_def(&mut self) -> PR<Stmt> {
@@ -327,6 +331,7 @@ impl Parser {
     }
 
     fn parse_expr_stmt(&mut self) -> PR<Stmt> {
+        let line = self.peek_line();
         let expr = self.parse_expr()?;
 
         // compound assignments: x += 1, x -= 1, x *= 2, x /= 2
@@ -342,7 +347,7 @@ impl Parser {
             let rhs = self.parse_expr()?;
             if let Expr::Ident(name) = &expr {
                 let value = Expr::BinOp { op, left: Box::new(Expr::Ident(name.clone())), right: Box::new(rhs) };
-                return Ok(Stmt::Assign { target: AssignTarget::Ident(name.clone()), value });
+                return Ok(Stmt::Assign { target: AssignTarget::Ident(name.clone()), value, line });
             }
         }
 
@@ -360,7 +365,7 @@ impl Parser {
                 Expr::Field { target, field } => AssignTarget::Field(target, field),
                 _ => return Err(ParseError { msg: "invalid assignment target".into(), line: self.peek_line(), col: self.peek_col() }),
             };
-            return Ok(Stmt::Assign { target, value });
+            return Ok(Stmt::Assign { target, value, line });
         }
 
         Ok(Stmt::ExprStmt(expr))

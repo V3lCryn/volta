@@ -421,7 +421,7 @@ impl Emitter {
 
     fn emit_stmt(&mut self, stmt: &Stmt) {
         match stmt {
-            Stmt::Let { name, ty, value } => {
+            Stmt::Let { name, ty, value, .. } => {
                 let c_ty = if let Some(t) = ty {
                     self.resolve_ty(Some(t))
                 } else {
@@ -469,7 +469,7 @@ impl Emitter {
                 self.iline(&format!("{} {} = {};", c_ty, name, val));
             }
 
-            Stmt::Assign { target, value } => {
+            Stmt::Assign { target, value, .. } => {
                 let val = self.emit_expr(value);
                 match target {
                     AssignTarget::Ident(n)       => self.iline(&format!("{} = {};", n, val)),
@@ -489,7 +489,7 @@ impl Emitter {
             Stmt::Break              => self.iline("break;"),
             Stmt::Continue           => self.iline("continue;"),
 
-            Stmt::If { cond, then_body, else_ifs, else_body } => {
+            Stmt::If { cond, then_body, else_ifs, else_body, .. } => {
                 let c = self.emit_cond(cond);
                 self.iline(&format!("if ({}) {{", c));
                 self.indent += 1; for s in then_body { self.emit_stmt(s); } self.indent -= 1;
@@ -505,7 +505,7 @@ impl Emitter {
                 self.iline("}");
             }
 
-            Stmt::While { cond, body } => {
+            Stmt::While { cond, body, .. } => {
                 let c = self.emit_cond(cond);
                 self.iline(&format!("while ({}) {{", c));
                 self.indent += 1; for s in body { self.emit_stmt(s); } self.indent -= 1;
@@ -513,7 +513,7 @@ impl Emitter {
             }
 
             // for x in range (0..n or 0..=n)
-            Stmt::For { var, iter, body } => {
+            Stmt::For { var, iter, body, .. } => {
                 match iter {
                     Expr::Range { start, end, inclusive } => {
                         let s = self.emit_expr(start);
@@ -543,7 +543,7 @@ impl Emitter {
             }
 
             // for i, x in array
-            Stmt::ForIndex { idx, var, iter, body } => {
+            Stmt::ForIndex { idx, var, iter, body, .. } => {
                 let arr = self.emit_expr(iter);
                 self.iline(&format!("for (int64_t {i}=0; {i}<{arr}.len; {i}++) {{", i=idx, arr=arr));
                 self.indent += 1;
