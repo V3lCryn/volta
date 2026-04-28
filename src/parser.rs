@@ -82,10 +82,16 @@ impl Parser {
 
     // Parse a type name:
     //   ident          → plain type
+    //   *T             → pointer to T (recursive, so **T works)
     //   [ident]        → dynamic typed array
     //   [ident; N]     → fixed-size stack array
     fn parse_type(&mut self) -> PR<String> {
         self.skip_newlines();
+        if self.check(&TokenKind::Star) {
+            self.advance();
+            let inner = self.parse_type()?;
+            return Ok(format!("*{}", inner));
+        }
         if self.check(&TokenKind::LBracket) {
             self.advance();
             let elem = self.expect_ident()?;
@@ -488,7 +494,8 @@ impl Parser {
                         return Err(ParseError { msg: "invalid assignment target".into(), line: self.peek_line(), col: self.peek_col() });
                     }
                 }
-                Expr::Field { target, field } => AssignTarget::Field(target, field),
+                Expr::Field { target, field }                              => AssignTarget::Field(target, field),
+                Expr::UnaryOp { op: UnaryOp::Deref, expr: ptr_expr }      => AssignTarget::Deref(ptr_expr),
                 _ => return Err(ParseError { msg: "invalid assignment target".into(), line: self.peek_line(), col: self.peek_col() }),
             };
             return Ok(Stmt::Assign { target, value, line });
@@ -588,10 +595,12 @@ impl Parser {
     fn parse_unary(&mut self) -> PR<Expr> {
         self.skip_newlines();
         match self.peek().clone() {
-            TokenKind::Minus => { self.advance(); Ok(Expr::UnaryOp { op: UnaryOp::Neg,    expr: Box::new(self.parse_unary()?) }) }
-            TokenKind::Not   => { self.advance(); Ok(Expr::UnaryOp { op: UnaryOp::Not,    expr: Box::new(self.parse_unary()?) }) }
-            TokenKind::Tilde => { self.advance(); Ok(Expr::UnaryOp { op: UnaryOp::BitNot, expr: Box::new(self.parse_unary()?) }) }
-            _                => self.parse_postfix(),
+            TokenKind::Minus     => { self.advance(); Ok(Expr::UnaryOp { op: UnaryOp::Neg,    expr: Box::new(self.parse_unary()?) }) }
+            TokenKind::Not       => { self.advance(); Ok(Expr::UnaryOp { op: UnaryOp::Not,    expr: Box::new(self.parse_unary()?) }) }
+            TokenKind::Tilde     => { self.advance(); Ok(Expr::UnaryOp { op: UnaryOp::BitNot, expr: Box::new(self.parse_unary()?) }) }
+            TokenKind::Ampersand => { self.advance(); Ok(Expr::UnaryOp { op: UnaryOp::Ref,    expr: Box::new(self.parse_unary()?) }) }
+            TokenKind::Star      => { self.advance(); Ok(Expr::UnaryOp { op: UnaryOp::Deref,  expr: Box::new(self.parse_unary()?) }) }
+            _                    => self.parse_postfix(),
         }
     }
 

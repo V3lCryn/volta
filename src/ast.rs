@@ -80,6 +80,8 @@ pub enum UnaryOp {
     Neg,
     Not,
     BitNot,
+    Ref,   // &expr  — address-of
+    Deref, // *expr  — dereference
 }
 
 #[derive(Debug, Clone)]
@@ -158,6 +160,7 @@ pub enum AssignTarget {
     Ident(String),
     Index(String, Box<Expr>),
     Field(Box<Expr>, String),
+    Deref(Box<Expr>), // *ptr = val
 }
 
 #[derive(Debug, Clone)]

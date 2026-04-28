@@ -356,6 +356,12 @@ impl Emitter {
             Some("str")               => "const char*".into(),
             Some("ptr")               => "void*".into(),
             Some("Result")            => "VResult".into(),
+            Some(ptr) if ptr.starts_with('*') => {
+                // Pointer type: *i64 → int64_t*, **u8 → uint8_t**, *str → const char**
+                let inner = &ptr[1..];
+                let base  = self.resolve_ty(Some(inner));
+                format!("{}*", base)
+            }
             Some(arr) if arr.starts_with('[') && arr.contains(';') => {
                 // Fixed-size array [i64;8] — decays to pointer when used as param type
                 let inner = &arr[1..arr.len()-1];
@@ -420,8 +426,22 @@ impl Emitter {
             }
             Expr::StructLit { name, .. }          => name.clone(),
             Expr::Array(_)                        => "VArray".into(),
-            Expr::Field { .. }                    => "int64_t".into(), // struct fields default to int
-            Expr::Index { .. }                    => "int64_t".into(), // array elements default to int
+            Expr::Field { .. }                    => "int64_t".into(),
+            Expr::Index { .. }                    => "int64_t".into(),
+            Expr::UnaryOp { op: UnaryOp::Ref, expr } => {
+                // &x → pointer to x's type
+                let inner = self.infer_type(expr);
+                format!("{}*", inner)
+            }
+            Expr::UnaryOp { op: UnaryOp::Deref, expr } => {
+                // *p → element type (strip one pointer level from p's type)
+                let ptr_ty = self.infer_type(expr);
+                if ptr_ty.ends_with('*') {
+                    ptr_ty[..ptr_ty.len()-1].trim().to_string()
+                } else {
+                    "int64_t".into()
+                }
+            }
             _ => "int64_t".into(), // safe default for unknown
         }
     }
@@ -626,7 +646,18 @@ impl Emitter {
                     }
                     AssignTarget::Field(obj, fld) => {
                         let o = self.emit_expr(obj);
-                        self.iline(&format!("{}.{} = {};", o, fld, val));
+                        let is_ptr = if let Expr::Ident(n) = obj.as_ref() {
+                            self.var_types.get(n.as_str()).map(|t| t.starts_with('*')).unwrap_or(false)
+                        } else { false };
+                        if is_ptr {
+                            self.iline(&format!("{}->{} = {};", o, fld, val));
+                        } else {
+                            self.iline(&format!("{}.{} = {};", o, fld, val));
+                        }
+                    }
+                    AssignTarget::Deref(ptr_expr) => {
+                        let p = self.emit_expr(ptr_expr);
+                        self.iline(&format!("*({}) = {};", p, val));
                     }
                 }
             }
@@ -897,6 +928,8 @@ impl Emitter {
                     UnaryOp::Neg    => format!("(-{})", e),
                     UnaryOp::Not    => format!("(!{})", e),
                     UnaryOp::BitNot => format!("(~{})", e),
+                    UnaryOp::Ref    => format!("(&({}))", e),
+                    UnaryOp::Deref  => format!("(*({}))", e),
                 }
             }
 
@@ -1015,8 +1048,14 @@ impl Emitter {
                     if self.enum_defs.contains_key(name.as_str()) {
                         return format!("{}_{}", name.to_uppercase(), field.to_uppercase());
                     }
+                    // Auto-deref: p.field where p is *Struct → p->field
+                    if self.var_types.get(name.as_str()).map(|t| t.starts_with('*')).unwrap_or(false) {
+                        return format!("{}->{}", name, field);
+                    }
                 }
-                format!("{}.{}", self.emit_expr(target), field)
+                let t = self.emit_expr(target);
+                // If target is already a deref expression (*p).field, C handles it fine
+                format!("{}.{}", t, field)
             }
             Expr::Index { target, index } => {
                 let t = self.emit_expr(target);

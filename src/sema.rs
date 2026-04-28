@@ -10,13 +10,17 @@ pub enum VType {
     Int, Float, Bool, Str, Nil, Ptr,
     Struct(String),
     Enum(String),
-    Array(String),  // element type name, e.g. "i64", "str"
+    Array(String),    // element type name, e.g. "i64", "str"
+    Pointer(String),  // pointee type name, e.g. "i64" for *i64
     Result,
     Unknown,
 }
 
 impl VType {
     pub fn from_str(s: &str) -> Self {
+        if s.starts_with('*') {
+            return VType::Pointer(s[1..].to_string());
+        }
         if s.starts_with('[') && s.ends_with(']') {
             let inner = &s[1..s.len()-1];
             if let Some(semi) = inner.find(';') {
@@ -38,17 +42,18 @@ impl VType {
     }
     pub fn to_display(&self) -> String {
         match self {
-            VType::Int       => "int".into(),
-            VType::Float     => "float".into(),
-            VType::Bool      => "bool".into(),
-            VType::Str       => "str".into(),
-            VType::Nil       => "nil".into(),
-            VType::Ptr       => "ptr".into(),
-            VType::Struct(s) => s.clone(),
-            VType::Enum(s)   => s.clone(),
-            VType::Array(e)  => format!("[{}]", e),
-            VType::Result    => "Result".into(),
-            VType::Unknown   => "?".into(),
+            VType::Int          => "int".into(),
+            VType::Float        => "float".into(),
+            VType::Bool         => "bool".into(),
+            VType::Str          => "str".into(),
+            VType::Nil          => "nil".into(),
+            VType::Ptr          => "ptr".into(),
+            VType::Struct(s)    => s.clone(),
+            VType::Enum(s)      => s.clone(),
+            VType::Array(e)     => format!("[{}]", e),
+            VType::Pointer(t)   => format!("*{}", t),
+            VType::Result       => "Result".into(),
+            VType::Unknown      => "?".into(),
         }
     }
 }
@@ -309,20 +314,33 @@ impl Checker {
             Stmt::Assign { target, value, line } => {
                 self.current_line = *line;
                 let val_ty = self.check_expr(value);
-                if let AssignTarget::Ident(name) = target {
-                    if self.lookup(name).is_none() {
-                        self.errors.push(SemaError::new(
-                            format!("assignment to undefined variable '{}'", name),
-                            self.current_line,
-                            format!("declare it first with: let {} = ...", name),
-                        ));
-                    }
-                    for scope in self.scopes.iter_mut().rev() {
-                        if scope.contains_key(name) {
-                            scope.insert(name.clone(), val_ty.clone());
-                            break;
+                match target {
+                    AssignTarget::Ident(name) => {
+                        if self.lookup(name).is_none() {
+                            self.errors.push(SemaError::new(
+                                format!("assignment to undefined variable '{}'", name),
+                                self.current_line,
+                                format!("declare it first with: let {} = ...", name),
+                            ));
+                        }
+                        for scope in self.scopes.iter_mut().rev() {
+                            if scope.contains_key(name) {
+                                scope.insert(name.clone(), val_ty.clone());
+                                break;
+                            }
                         }
                     }
+                    AssignTarget::Deref(ptr_expr) => {
+                        let ptr_ty = self.check_expr(ptr_expr);
+                        if !matches!(ptr_ty, VType::Pointer(_) | VType::Ptr | VType::Unknown) {
+                            self.errors.push(SemaError::new(
+                                format!("cannot assign through non-pointer type '{}'", ptr_ty.to_display()),
+                                self.current_line,
+                                "use a pointer (*T) as the dereference target",
+                            ));
+                        }
+                    }
+                    _ => { self.check_expr(value); }
                 }
             }
             Stmt::Const { name, ty, value, line } => {
@@ -484,7 +502,14 @@ impl Checker {
                 let lt = self.check_expr(left);
                 let rt = self.check_expr(right);
                 match op {
-                    BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
+                    BinOp::Add | BinOp::Sub => {
+                        // Pointer arithmetic: *T + int → *T
+                        if matches!(&lt, VType::Pointer(_)) { lt }
+                        else if matches!(&rt, VType::Pointer(_)) { rt }
+                        else if lt == VType::Float || rt == VType::Float { VType::Float }
+                        else { VType::Int }
+                    }
+                    BinOp::Mul | BinOp::Div | BinOp::Mod => {
                         if lt == VType::Float || rt == VType::Float { VType::Float }
                         else { VType::Int }
                     }
@@ -501,6 +526,26 @@ impl Checker {
                     UnaryOp::Not    => VType::Bool,
                     UnaryOp::Neg    => t,
                     UnaryOp::BitNot => VType::Int,
+                    UnaryOp::Ref    => {
+                        // &x has type *T where x has type T
+                        VType::Pointer(t.to_display())
+                    }
+                    UnaryOp::Deref  => {
+                        // *p has type T where p has type *T
+                        match t {
+                            VType::Pointer(inner) => VType::from_str(&inner),
+                            VType::Ptr            => VType::Unknown, // void* deref
+                            VType::Unknown        => VType::Unknown,
+                            other => {
+                                self.errors.push(SemaError::new(
+                                    format!("cannot dereference non-pointer type '{}'", other.to_display()),
+                                    self.current_line,
+                                    "only pointer types (*T) can be dereferenced",
+                                ));
+                                VType::Unknown
+                            }
+                        }
+                    }
                 }
             }
 
