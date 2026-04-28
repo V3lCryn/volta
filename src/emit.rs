@@ -29,6 +29,7 @@ pub struct Emitter {
     var_types:    HashMap<String, String>,
     struct_defs:  HashMap<String, Vec<(String, String)>>,
     struct_names: HashSet<String>,
+    enum_defs:    HashMap<String, Vec<String>>,
     tmp_counter:  usize,
 }
 
@@ -38,6 +39,7 @@ impl Emitter {
             out: String::new(), indent: 0,
             fn_types: HashMap::new(), var_types: HashMap::new(),
             struct_defs: HashMap::new(), struct_names: HashSet::new(),
+            enum_defs: HashMap::new(),
             tmp_counter: 0,
         }
     }
@@ -65,6 +67,9 @@ impl Emitter {
                     self.struct_defs.insert(s.name.clone(), s.fields.clone());
                     self.struct_names.insert(s.name.clone());
                 }
+                Stmt::EnumDef(e) => {
+                    self.enum_defs.insert(e.name.clone(), e.variants.clone());
+                }
                 Stmt::FnDef(f) => {
                     let ret = self.resolve_ty(f.ret_ty.as_deref());
                     self.fn_types.insert(f.name.clone(), ret);
@@ -82,6 +87,11 @@ impl Emitter {
         // Struct definitions
         for stmt in &prog.stmts {
             if let Stmt::StructDef(s) = stmt { self.emit_struct_def(s); }
+        }
+
+        // Enum definitions
+        for stmt in &prog.stmts {
+            if let Stmt::EnumDef(e) = stmt { self.emit_enum_def(e); }
         }
 
         // Extern declarations
@@ -114,7 +124,7 @@ impl Emitter {
 
         // Top-level → main()
         let top: Vec<&Stmt> = prog.stmts.iter().filter(|s|
-            !matches!(s, Stmt::FnDef(_)|Stmt::ExternBlock(_)|Stmt::DeviceBlock(_)|Stmt::StructDef(_))
+            !matches!(s, Stmt::FnDef(_)|Stmt::ExternBlock(_)|Stmt::DeviceBlock(_)|Stmt::StructDef(_)|Stmt::EnumDef(_))
         ).collect();
 
         if !top.is_empty() {
@@ -372,6 +382,17 @@ impl Emitter {
         self.line(&format!("}} {};\n", s.name));
     }
 
+    // ── Enum ──────────────────────────────────────────────────────────────────
+
+    fn emit_enum_def(&mut self, e: &EnumDef) {
+        self.line(&format!("typedef int64_t {};", e.name));
+        for (i, variant) in e.variants.iter().enumerate() {
+            let macro_name = format!("{}_{}", e.name.to_uppercase(), variant.to_uppercase());
+            self.line(&format!("#define {} {}", macro_name, i));
+        }
+        self.line("");
+    }
+
     // ── Extern ────────────────────────────────────────────────────────────────
 
     fn emit_extern_block(&mut self, eb: &ExternBlock) {
@@ -554,7 +575,33 @@ impl Emitter {
             }
 
             Stmt::ExprStmt(expr) => { let e = self.emit_expr(expr); self.iline(&format!("{};", e)); }
-            Stmt::FnDef(_) | Stmt::ExternBlock(_) | Stmt::DeviceBlock(_) | Stmt::StructDef(_) => {}
+
+            Stmt::Match { expr, arms, .. } => {
+                let e = self.emit_expr(expr);
+                self.iline(&format!("switch ({}) {{", e));
+                self.indent += 1;
+                for arm in arms {
+                    match &arm.pattern {
+                        MatchPattern::Variant { enum_name, variant } => {
+                            let macro_name = format!("{}_{}", enum_name.to_uppercase(), variant.to_uppercase());
+                            self.iline(&format!("case {}: {{", macro_name));
+                        }
+                        MatchPattern::Wildcard => {
+                            self.iline("default: {");
+                        }
+                    }
+                    self.indent += 1;
+                    for s in &arm.body { self.emit_stmt(s); }
+                    self.iline("break;");
+                    self.indent -= 1;
+                    self.iline("}");
+                }
+                self.indent -= 1;
+                self.iline("}");
+            }
+
+            Stmt::FnDef(_) | Stmt::ExternBlock(_) | Stmt::DeviceBlock(_)
+            | Stmt::StructDef(_) | Stmt::EnumDef(_) => {}
         }
     }
 
@@ -774,7 +821,14 @@ impl Emitter {
                 format!("{}.{}({})", t, method, a.join(", "))
             }
 
-            Expr::Field { target, field }      => format!("{}.{}", self.emit_expr(target), field),
+            Expr::Field { target, field } => {
+                if let Expr::Ident(name) = target.as_ref() {
+                    if self.enum_defs.contains_key(name.as_str()) {
+                        return format!("{}_{}", name.to_uppercase(), field.to_uppercase());
+                    }
+                }
+                format!("{}.{}", self.emit_expr(target), field)
+            }
             Expr::Index { target, index } => {
                 let t = self.emit_expr(target);
                 let i = self.emit_expr(index);

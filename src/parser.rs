@@ -142,6 +142,8 @@ impl Parser {
             TokenKind::Fn      => self.parse_fn_def(false),
             TokenKind::Pub      => { self.advance(); self.parse_fn_def(true) }
             TokenKind::Struct   => self.parse_struct_def(),
+            TokenKind::Enum     => self.parse_enum_def(),
+            TokenKind::Match    => self.parse_match(),
             TokenKind::At       => self.parse_at_block(),
             _                   => self.parse_expr_stmt(),
         }
@@ -276,6 +278,56 @@ impl Parser {
             if !self.eat(&TokenKind::Comma) { break; }
         }
         Ok(params)
+    }
+
+    fn parse_enum_def(&mut self) -> PR<Stmt> {
+        let line = self.peek_line();
+        self.advance(); // eat 'enum'
+        let name = self.expect_ident()?;
+        let mut variants = Vec::new();
+        loop {
+            self.skip_newlines();
+            if matches!(self.peek(), TokenKind::End | TokenKind::Eof) { break; }
+            variants.push(self.expect_ident()?);
+        }
+        self.expect(&TokenKind::End)?;
+        Ok(Stmt::EnumDef(EnumDef { name, variants, line }))
+    }
+
+    fn parse_match(&mut self) -> PR<Stmt> {
+        let line = self.peek_line();
+        self.advance(); // eat 'match'
+        let expr = self.parse_expr()?;
+        self.expect(&TokenKind::Do)?;
+        let mut arms = Vec::new();
+        loop {
+            self.skip_newlines();
+            if matches!(self.peek(), TokenKind::End | TokenKind::Eof) { break; }
+            let pattern = self.parse_match_pattern()?;
+            self.expect(&TokenKind::FatArrow)?;
+            // Body: 'do' block or single expression
+            let body = if self.eat(&TokenKind::Do) {
+                let stmts = self.parse_block()?;
+                self.expect(&TokenKind::End)?;
+                stmts
+            } else {
+                vec![Stmt::ExprStmt(self.parse_expr()?)]
+            };
+            arms.push(MatchArm { pattern, body });
+        }
+        self.expect(&TokenKind::End)?;
+        Ok(Stmt::Match { expr, arms, line })
+    }
+
+    fn parse_match_pattern(&mut self) -> PR<MatchPattern> {
+        self.skip_newlines();
+        let name = self.expect_ident()?;
+        if name == "_" {
+            return Ok(MatchPattern::Wildcard);
+        }
+        self.expect(&TokenKind::Dot)?;
+        let variant = self.expect_ident()?;
+        Ok(MatchPattern::Variant { enum_name: name, variant })
     }
 
     fn parse_at_block(&mut self) -> PR<Stmt> {

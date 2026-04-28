@@ -9,7 +9,8 @@ use std::collections::HashMap;
 pub enum VType {
     Int, Float, Bool, Str, Nil, Ptr,
     Struct(String),
-    Unknown, // inference failed — not an error
+    Enum(String),
+    Unknown,
 }
 
 impl VType {
@@ -26,14 +27,15 @@ impl VType {
     }
     pub fn to_display(&self) -> &str {
         match self {
-            VType::Int      => "int",
-            VType::Float    => "float",
-            VType::Bool     => "bool",
-            VType::Str      => "str",
-            VType::Nil      => "nil",
-            VType::Ptr      => "ptr",
-            VType::Struct(s)=> s,
-            VType::Unknown  => "?",
+            VType::Int       => "int",
+            VType::Float     => "float",
+            VType::Bool      => "bool",
+            VType::Str       => "str",
+            VType::Nil       => "nil",
+            VType::Ptr       => "ptr",
+            VType::Struct(s) => s,
+            VType::Enum(s)   => s,
+            VType::Unknown   => "?",
         }
     }
 }
@@ -63,6 +65,7 @@ pub struct Checker {
     scopes:       Vec<HashMap<String, VType>>,
     fn_types:     HashMap<String, VType>,
     structs:      HashMap<String, Vec<(String, VType)>>,
+    enums:        HashMap<String, Vec<String>>,
     pub errors:   Vec<SemaError>,
     pub warnings: Vec<SemaError>,
     current_line: usize,
@@ -74,6 +77,7 @@ impl Checker {
             scopes: vec![HashMap::new()],
             fn_types: HashMap::new(),
             structs: HashMap::new(),
+            enums: HashMap::new(),
             errors: Vec::new(),
             warnings: Vec::new(),
             current_line: 0,
@@ -189,7 +193,7 @@ impl Checker {
     }
 
     pub fn check_program(&mut self, prog: &Program) {
-        // First pass: register all function signatures
+        // First pass: register all type signatures
         for stmt in &prog.stmts {
             match stmt {
                 Stmt::FnDef(f) => {
@@ -201,6 +205,9 @@ impl Checker {
                         .map(|(n, t)| (n.clone(), VType::from_str(t)))
                         .collect();
                     self.structs.insert(s.name.clone(), fields);
+                }
+                Stmt::EnumDef(e) => {
+                    self.enums.insert(e.name.clone(), e.variants.clone());
                 }
                 Stmt::ExternBlock(eb) => {
                     for f in &eb.fns {
@@ -327,6 +334,33 @@ impl Checker {
             }
             Stmt::ExprStmt(e) => { self.check_expr(e); }
             Stmt::Return(Some(e)) => { self.check_expr(e); }
+            Stmt::EnumDef(_) => {} // registered in first pass
+            Stmt::Match { expr, arms, line } => {
+                self.current_line = *line;
+                let match_ty = self.check_expr(expr);
+                // Validate each arm pattern against the matched enum
+                for arm in arms {
+                    if let MatchPattern::Variant { enum_name, variant } = &arm.pattern {
+                        if let Some(variants) = self.enums.get(enum_name) {
+                            if !variants.contains(variant) {
+                                self.errors.push(SemaError::new(
+                                    format!("enum '{}' has no variant '{}'", enum_name, variant),
+                                    self.current_line,
+                                    format!("valid variants: {}", variants.join(", ")),
+                                ));
+                            }
+                        } else if match_ty != VType::Unknown {
+                            self.errors.push(SemaError::new(
+                                format!("'{}' is not a known enum", enum_name),
+                                self.current_line, "",
+                            ));
+                        }
+                    }
+                    self.push_scope();
+                    for s in &arm.body { self.check_stmt(s); }
+                    self.pop_scope();
+                }
+            }
             _ => {}
         }
     }
@@ -406,6 +440,22 @@ impl Checker {
             }
 
             Expr::Field { target, field } => {
+                // Check for enum variant access: EnumName.Variant
+                if let Expr::Ident(name) = target.as_ref() {
+                    if let Some(variants) = self.enums.get(name) {
+                        if variants.contains(field) {
+                            return VType::Enum(name.clone());
+                        } else {
+                            self.errors.push(SemaError::new(
+                                format!("enum '{}' has no variant '{}'", name, field),
+                                self.current_line,
+                                format!("valid variants: {}", variants.join(", ")),
+                            ));
+                            return VType::Unknown;
+                        }
+                    }
+                }
+                // Struct field access
                 let t = self.check_expr(target);
                 if let VType::Struct(sname) = &t {
                     if let Some(fields) = self.structs.get(sname.as_str()) {

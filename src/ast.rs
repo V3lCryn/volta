@@ -132,8 +132,14 @@ pub enum Stmt {
     ExprStmt(Expr),
     FnDef(FnDef),
     StructDef(StructDef),
+    EnumDef(EnumDef),
     ExternBlock(ExternBlock),
     DeviceBlock(DeviceBlock),
+    Match {
+        expr: Expr,
+        arms: Vec<MatchArm>,
+        line: usize,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -189,6 +195,25 @@ pub struct DeviceBlock {
 pub struct Register {
     pub name: String,
     pub ty:   String,
+}
+
+#[derive(Debug, Clone)]
+pub struct EnumDef {
+    pub name:     String,
+    pub variants: Vec<String>,
+    pub line:     usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct MatchArm {
+    pub pattern: MatchPattern,
+    pub body:    Vec<Stmt>,
+}
+
+#[derive(Debug, Clone)]
+pub enum MatchPattern {
+    Variant { enum_name: String, variant: String },
+    Wildcard,
 }
 
 #[derive(Debug, Clone)]

@@ -16,12 +16,13 @@ pub enum TokenKind {
     End, Do, And, Or, Not, Nil,
     Break, Continue, Struct,
     Extern, Device, Import, As, Pub,
+    Enum, Match,
 
     // Operators
     Plus, Minus, Star, Slash, Percent,
     Eq, EqEq, BangEq,
     Lt, LtEq, Gt, GtEq,
-    DotDot, DotDotEq, Dot, Arrow, At,
+    DotDot, DotDotEq, Dot, Arrow, FatArrow, At,
     PlusEq, MinusEq, StarEq, SlashEq,
     Ampersand, Pipe, Caret, Tilde,
     ShiftL, ShiftR,
@@ -213,6 +214,8 @@ impl<'a> Lexer<'a> {
             "import"   => TokenKind::Import,
             "as"       => TokenKind::As,
             "pub"      => TokenKind::Pub,
+            "enum"     => TokenKind::Enum,
+            "match"    => TokenKind::Match,
             _          => TokenKind::Ident(s),
         }
     }
@@ -252,7 +255,9 @@ impl<'a> Lexer<'a> {
             b'-'  => { if self.eat_if(b'>') { TokenKind::Arrow }
                        else if self.eat_if(b'=') { TokenKind::MinusEq }
                        else { TokenKind::Minus } }
-            b'='  => { if self.eat_if(b'=') { TokenKind::EqEq   } else { TokenKind::Eq    } }
+            b'='  => { if self.eat_if(b'=') { TokenKind::EqEq }
+                       else if self.eat_if(b'>') { TokenKind::FatArrow }
+                       else { TokenKind::Eq } }
             b'!'  => { if self.eat_if(b'=') { TokenKind::BangEq }
                        else { return Err(LexError::new("expected '!='", line, col, &self.lines)); } }
             b'<'  => { if self.eat_if(b'=') { TokenKind::LtEq   }
