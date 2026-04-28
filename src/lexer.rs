@@ -156,7 +156,12 @@ impl<'a> Lexer<'a> {
             while let Some(c) = self.peek() {
                 if c.is_ascii_hexdigit() { hex.push(c as char); self.advance(); } else { break; }
             }
-            return Ok(TokenKind::Integer(i64::from_str_radix(&hex, 16).unwrap_or(0)));
+            return i64::from_str_radix(&hex, 16)
+                .map(TokenKind::Integer)
+                .map_err(|_| LexError::new(
+                    &format!("invalid hex literal '0x{}'", hex),
+                    self.line, self.col, &self.lines,
+                ));
         }
         while let Some(ch) = self.peek() {
             if ch.is_ascii_digit() { num.push(ch as char); self.advance(); }
@@ -164,8 +169,15 @@ impl<'a> Lexer<'a> {
                 is_float = true; num.push('.'); self.advance();
             } else { break; }
         }
-        if is_float { Ok(TokenKind::Float(num.parse().unwrap())) }
-        else        { Ok(TokenKind::Integer(num.parse().unwrap())) }
+        if is_float {
+            num.parse::<f64>()
+                .map(TokenKind::Float)
+                .map_err(|_| LexError::new("invalid float literal", self.line, self.col, &self.lines))
+        } else {
+            num.parse::<i64>()
+                .map(TokenKind::Integer)
+                .map_err(|_| LexError::new("invalid integer literal", self.line, self.col, &self.lines))
+        }
     }
 
     fn read_ident(&mut self, first: u8) -> TokenKind {
@@ -288,6 +300,8 @@ impl std::fmt::Display for LexError {
         write!(f, "{}", self.msg)
     }
 }
+
+impl std::error::Error for LexError {}
 
 #[cfg(test)]
 mod tests {

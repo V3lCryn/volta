@@ -3,6 +3,25 @@
 use crate::ast::*;
 use std::collections::{HashMap, HashSet};
 
+// ── Error type ────────────────────────────────────────────────────────────────
+
+#[derive(Debug)]
+pub struct EmitError {
+    pub msg: String,
+}
+
+impl EmitError {
+    fn new(msg: impl Into<String>) -> Self { EmitError { msg: msg.into() } }
+}
+
+impl std::fmt::Display for EmitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.msg)
+    }
+}
+
+impl std::error::Error for EmitError {}
+
 pub struct Emitter {
     out:          String,
     indent:       usize,
@@ -28,7 +47,7 @@ impl Emitter {
         format!("_vt{}", self.tmp_counter)
     }
 
-    pub fn emit_program(mut self, prog: &Program) -> String {
+    pub fn emit_program(mut self, prog: &Program) -> Result<String, EmitError> {
         self.line("#include <stdio.h>");
         self.line("#include <stdint.h>");
         self.line("#include <string.h>");
@@ -108,7 +127,7 @@ impl Emitter {
             self.line("}");
         }
 
-        self.out
+        Ok(self.out)
     }
 
     // ── Runtime ───────────────────────────────────────────────────────────────
@@ -588,10 +607,10 @@ impl Emitter {
                     let is_bool = self.var_types.get(&expr_src).map(|t| t == "bool").unwrap_or(false) || is_bool_fn;
                     let is_float = self.var_types.get(&expr_src).map(|t| t == "f64" || t == "f32" || t == "float").unwrap_or(false) || is_float_fn;
                     // Handle array indexing: nums[i] -> AGET_INT(nums, i)
-                    let expr_emit = if expr_src.contains('[') && expr_src.contains(']') {
-                        let bracket = expr_src.find('[').unwrap();
+                    let expr_emit = if let Some(bracket) = expr_src.find('[') {
+                        let close    = expr_src.rfind(']').unwrap_or(expr_src.len());
                         let arr_name = expr_src[..bracket].trim().to_string();
-                        let idx_part = expr_src[bracket+1..expr_src.rfind(']').unwrap_or(expr_src.len())].trim().to_string();
+                        let idx_part = expr_src[bracket+1..close].trim().to_string();
                         format!("AGET_INT({}, {})", arr_name, idx_part)
                     } else {
                         expr_src.clone()
@@ -892,7 +911,7 @@ mod tests {
     fn compile(src: &str) -> String {
         let tokens = Lexer::new(src).tokenize().unwrap();
         let prog   = Parser::new(tokens).parse_program().unwrap();
-        Emitter::new().emit_program(&prog)
+        Emitter::new().emit_program(&prog).unwrap()
     }
 
     #[test] fn emits_let()           { assert!(compile("let x = 42").contains("int64_t x = 42;")); }

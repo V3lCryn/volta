@@ -1,11 +1,13 @@
 // volta/src/main.rs — Volta compiler v0.2.0
 
+mod error;
 mod lexer;
 mod ast;
 mod parser;
 mod sema;
 mod emit;
 
+use error::{VoltaError, Span};
 use std::collections::HashSet;
 use std::env;
 use std::fs;
@@ -24,10 +26,13 @@ fn main() {
         Some("build") => cmd_build(&args, false),
         Some("run")   => cmd_build(&args, true),
         Some(path)    => {
-            // Direct: volta file.vlt [args...]
             let pb = PathBuf::from(path);
             if !pb.exists() {
-                error_exit(&format!("file not found: {}", path));
+                error::render_error(&VoltaError::Io {
+                    path:   path.to_string(),
+                    detail: "file not found".into(),
+                });
+                process::exit(1);
             }
             run_file(&pb, &args[2..], true);
         }
@@ -37,21 +42,43 @@ fn main() {
 // ── Commands ──────────────────────────────────────────────────────────────────
 
 fn cmd_new(args: &[String]) {
-    let name = args.get(2).unwrap_or_else(|| {
-        eprintln!("usage: volta new <project-name>");
-        process::exit(1);
-    });
+    let name = match args.get(2) {
+        Some(n) => n,
+        None => {
+            eprintln!("usage: volta new <project-name>");
+            process::exit(1);
+        }
+    };
 
     let dir = PathBuf::from(name);
     if dir.exists() {
-        error_exit(&format!("directory '{}' already exists", name));
+        error::render_error(&VoltaError::Io {
+            path:   name.clone(),
+            detail: format!("directory '{}' already exists", name),
+        });
+        process::exit(1);
     }
 
-    fs::create_dir_all(dir.join("lib")).unwrap();
-    fs::create_dir_all(dir.join("examples")).unwrap();
+    let write = |path: PathBuf, content: &str| {
+        fs::write(&path, content).unwrap_or_else(|e| {
+            error::render_error(&VoltaError::Io {
+                path:   path.display().to_string(),
+                detail: e.to_string(),
+            });
+            process::exit(1);
+        });
+    };
 
-    // main.vlt
-    fs::write(dir.join("main.vlt"), format!(
+    fs::create_dir_all(dir.join("lib")).unwrap_or_else(|e| {
+        error::render_error(&VoltaError::Io { path: name.clone(), detail: e.to_string() });
+        process::exit(1);
+    });
+    fs::create_dir_all(dir.join("examples")).unwrap_or_else(|e| {
+        error::render_error(&VoltaError::Io { path: name.clone(), detail: e.to_string() });
+        process::exit(1);
+    });
+
+    write(dir.join("main.vlt"), &format!(
 r#"-- {name} — a Volta project
 -- run: volta main.vlt
 
@@ -63,10 +90,9 @@ let name = "{name}"
 let msg = greet(name)
 print(msg)
 print("Built with Volta -- github.com/V3lCryn/volta")
-"#, name=name)).unwrap();
+"#, name=name));
 
-    // lib/utils.vlt
-    fs::write(dir.join("lib").join("utils.vlt"),
+    write(dir.join("lib").join("utils.vlt"),
 r#"-- utils.vlt — shared utilities for this project
 
 fn repeat_str(s: str, n: i64) -> str
@@ -84,50 +110,75 @@ fn clamp(val: i64, lo: i64, hi: i64) -> i64
   if val > hi do return hi end
   return val
 end
-"#).unwrap();
+"#);
 
-    // .gitignore
-    fs::write(dir.join(".gitignore"),
-"*.c\ntarget/\n").unwrap();
+    write(dir.join(".gitignore"), "*.c\ntarget/\n");
 
     println!("\x1b[32m✓\x1b[0m Created project '{}'", name);
-    println!("");
+    println!();
     println!("  \x1b[36mcd {}\x1b[0m", name);
     println!("  \x1b[36mvolta main.vlt\x1b[0m");
-    println!("");
+    println!();
 }
 
 fn cmd_build(args: &[String], run: bool) {
-    let path = args.get(2).unwrap_or_else(|| {
-        eprintln!("usage: volta {} <file.vlt>", if run { "run" } else { "build" });
-        process::exit(1);
-    });
+    let path = match args.get(2) {
+        Some(p) => p,
+        None => {
+            eprintln!("usage: volta {} <file.vlt>", if run { "run" } else { "build" });
+            process::exit(1);
+        }
+    };
     let pb = PathBuf::from(path);
-    if !pb.exists() { error_exit(&format!("file not found: {}", path)); }
+    if !pb.exists() {
+        error::render_error(&VoltaError::Io {
+            path:   path.clone(),
+            detail: "file not found".into(),
+        });
+        process::exit(1);
+    }
     run_file(&pb, &args[3..], run);
 }
 
 // ── Core pipeline ─────────────────────────────────────────────────────────────
 
 fn run_file(input_path: &Path, extra_args: &[String], do_run: bool) {
+    if let Err(e) = try_run_file(input_path, extra_args, do_run) {
+        error::render_error(&e);
+        process::exit(1);
+    }
+}
+
+fn try_run_file(input_path: &Path, extra_args: &[String], do_run: bool) -> Result<(), VoltaError> {
     let dir  = input_path.parent().unwrap_or(Path::new(".")).to_path_buf();
-    let stem = input_path.file_stem().unwrap().to_string_lossy().to_string();
-    let c_path   = dir.join(format!("{}.c", stem));
+    let stem = input_path
+        .file_stem()
+        .ok_or_else(|| VoltaError::Io {
+            path:   input_path.display().to_string(),
+            detail: "invalid file name".into(),
+        })?
+        .to_string_lossy()
+        .to_string();
+
+    let c_path   = dir.join(format!("{}.c",  stem));
     let bin_path = dir.join(&stem);
 
-    // Compile
     let mut visited = HashSet::new();
-    let c_code = compile_file(input_path, &dir, &mut visited);
+    let c_code = compile_file(input_path, &dir, &mut visited)?;
 
-    fs::write(&c_path, &c_code).unwrap_or_else(|e| {
-        error_exit(&format!("cannot write {}: {}", c_path.display(), e));
-    });
+    fs::write(&c_path, &c_code).map_err(|e| VoltaError::Io {
+        path:   c_path.display().to_string(),
+        detail: e.to_string(),
+    })?;
 
     let compiler = if which("clang") { "clang" } else { "cc" };
-    let status = Command::new(compiler)
+
+    let bin_str = bin_path.to_str().unwrap_or("a.out");
+    let c_str   = c_path.to_str().unwrap_or("out.c");
+
+    let output = Command::new(compiler)
         .args([
-            "-o", bin_path.to_str().unwrap(),
-            c_path.to_str().unwrap(),
+            "-o", bin_str, c_str,
             "-std=c99",
             "-Wno-unused-function",
             "-Wno-unused-variable",
@@ -137,38 +188,56 @@ fn run_file(input_path: &Path, extra_args: &[String], do_run: bool) {
             "-L/usr/local/opt/libpq/lib",
             "-lpq",
         ])
-        .status()
-        .unwrap_or_else(|e| error_exit(&format!("compiler error: {}", e)));
+        .output()
+        .map_err(|e| VoltaError::Io {
+            path:   compiler.to_string(),
+            detail: format!("could not start C compiler: {}", e),
+        })?;
 
-    if !status.success() {
-        eprintln!("\n\x1b[31merror\x1b[0m: compilation failed — check {}", c_path.display());
-        process::exit(1);
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        return Err(VoltaError::CCompile {
+            stderr,
+            c_path: c_path.display().to_string(),
+        });
     }
 
     if do_run {
-        let abs_bin = bin_path.canonicalize().unwrap_or(bin_path.clone());
+        let abs_bin = bin_path.canonicalize().unwrap_or_else(|_| bin_path.clone());
         let run_status = Command::new(&abs_bin)
             .args(extra_args)
             .status()
-            .unwrap_or_else(|e| error_exit(&format!("run error: {}", e)));
+            .map_err(|e| VoltaError::Io {
+                path:   abs_bin.display().to_string(),
+                detail: format!("could not run binary: {}", e),
+            })?;
         if !run_status.success() {
             process::exit(run_status.code().unwrap_or(1));
         }
     } else {
         println!("\x1b[32m✓\x1b[0m built: {}", bin_path.display());
     }
+
+    Ok(())
 }
 
 // ── Module resolution ─────────────────────────────────────────────────────────
 
-fn compile_file(path: &Path, base_dir: &Path, visited: &mut HashSet<PathBuf>) -> String {
-    let canonical = fs::canonicalize(path).unwrap_or(path.to_path_buf());
-    if visited.contains(&canonical) { return String::new(); }
+fn compile_file(
+    path:     &Path,
+    base_dir: &Path,
+    visited:  &mut HashSet<PathBuf>,
+) -> Result<String, VoltaError> {
+    let canonical = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    if visited.contains(&canonical) { return Ok(String::new()); }
     visited.insert(canonical);
 
-    let src = fs::read_to_string(path).unwrap_or_else(|_| {
-        error_exit(&format!("cannot read: {}", path.display()));
-    });
+    let filename = path.to_string_lossy().into_owned();
+
+    let src = fs::read_to_string(path).map_err(|e| VoltaError::Io {
+        path:   filename.clone(),
+        detail: e.to_string(),
+    })?;
 
     let (imports, clean_src) = extract_imports(&src);
 
@@ -176,18 +245,20 @@ fn compile_file(path: &Path, base_dir: &Path, visited: &mut HashSet<PathBuf>) ->
     for imp in &imports {
         let imp_path = resolve_import(imp, path);
         if !imp_path.exists() {
-            print_error(
-                path.to_str().unwrap_or("?"), 0, 0,
-                &format!("cannot find module '{}'", imp),
-                &format!("looked for: {}", imp_path.display()),
-            );
-            process::exit(1);
+            return Err(VoltaError::Module {
+                name:     imp.clone(),
+                searched: imp_path.display().to_string(),
+            });
         }
-        let imp_src  = fs::read_to_string(&imp_path).unwrap_or_default();
+        let imp_src = fs::read_to_string(&imp_path).map_err(|e| VoltaError::Io {
+            path:   imp_path.display().to_string(),
+            detail: e.to_string(),
+        })?;
         let (_, imp_clean) = extract_imports(&imp_src);
+        let imp_file = imp_path.to_string_lossy().into_owned();
         let imp_dir  = imp_path.parent().unwrap_or(base_dir);
-        let toks = lex_source(&imp_clean, imp_path.to_str().unwrap_or("?"));
-        let prog = parse_tokens(toks, imp_path.to_str().unwrap_or("?"));
+        let toks = lex_source(&imp_clean, &imp_file)?;
+        let prog = parse_tokens(toks, &imp_file)?;
         for stmt in prog.stmts {
             match &stmt {
                 ast::Stmt::FnDef(_) | ast::Stmt::StructDef(_) |
@@ -197,31 +268,31 @@ fn compile_file(path: &Path, base_dir: &Path, visited: &mut HashSet<PathBuf>) ->
                 _ => {}
             }
         }
-        compile_file(&imp_path, imp_dir, visited);
+        compile_file(&imp_path, imp_dir, visited)?;
     }
 
-    let toks = lex_source(&clean_src, path.to_str().unwrap_or("?"));
-    let mut prog = parse_tokens(toks, path.to_str().unwrap_or("?"));
+    let toks = lex_source(&clean_src, &filename)?;
+    let mut prog = parse_tokens(toks, &filename)?;
     imported.append(&mut prog.stmts);
     prog.stmts = imported;
 
-    // Type check
     let mut checker = sema::Checker::new();
     checker.check_program(&prog);
 
     for w in &checker.warnings {
-        eprintln!("\x1b[33mwarning\x1b[0m: {}", w.msg);
-        if !w.hint.is_empty() { eprintln!("  \x1b[36mhint\x1b[0m: {}", w.hint); }
-    }
-    if !checker.errors.is_empty() {
-        for e in &checker.errors {
-            eprintln!("\x1b[31merror\x1b[0m: {}", e.msg);
-            if !e.hint.is_empty() { eprintln!("  \x1b[36mhint\x1b[0m: {}", e.hint); }
-        }
-        process::exit(1);
+        error::render_warning(&filename, w.line, 0, &w.msg, &w.hint);
     }
 
-    emit::Emitter::new().emit_program(&prog)
+    if !checker.errors.is_empty() {
+        let errors = checker.errors.iter()
+            .map(|e| (e.line, e.msg.clone(), e.hint.clone()))
+            .collect();
+        return Err(VoltaError::Sema { errors, file: filename });
+    }
+
+    emit::Emitter::new()
+        .emit_program(&prog)
+        .map_err(|e| VoltaError::Emit { msg: e.msg })
 }
 
 fn extract_imports(src: &str) -> (Vec<String>, String) {
@@ -243,14 +314,11 @@ fn extract_imports(src: &str) -> (Vec<String>, String) {
 
 fn resolve_import(name: &str, current_file: &Path) -> PathBuf {
     let current_dir = current_file.parent().unwrap_or(Path::new("."));
-    // Try relative to current file
     let rel = current_dir.join(format!("{}.vlt", name));
     if let Ok(c) = fs::canonicalize(&rel) { if c.exists() { return c; } }
     if rel.exists() { return rel; }
-    // Try from cwd
     let cwd = PathBuf::from(format!("{}.vlt", name));
     if cwd.exists() { return cwd; }
-    // Try ~/.volta/lib/
     if let Ok(home) = env::var("HOME") {
         let stdlib = PathBuf::from(home).join(".volta").join("lib").join(format!("{}.vlt", name));
         if stdlib.exists() { return stdlib; }
@@ -258,46 +326,24 @@ fn resolve_import(name: &str, current_file: &Path) -> PathBuf {
     rel
 }
 
-fn lex_source(src: &str, filename: &str) -> Vec<lexer::Token> {
-    lexer::Lexer::new(src).tokenize().unwrap_or_else(|e| {
-        print_error(filename, e.line, e.col, &e.msg, "");
-        process::exit(1);
+// ── Per-phase adapters ────────────────────────────────────────────────────────
+
+fn lex_source(src: &str, filename: &str) -> Result<Vec<lexer::Token>, VoltaError> {
+    lexer::Lexer::new(src).tokenize().map_err(|e| VoltaError::Lex {
+        span:     Span::new(filename, e.line, e.col),
+        msg:      e.msg.clone(),
+        src_line: e.src_line.clone(),
     })
 }
 
-fn parse_tokens(tokens: Vec<lexer::Token>, filename: &str) -> ast::Program {
-    parser::Parser::new(tokens).parse_program().unwrap_or_else(|e| {
-        print_error(filename, e.line, 0, &e.msg, "");
-        process::exit(1);
+fn parse_tokens(tokens: Vec<lexer::Token>, filename: &str) -> Result<ast::Program, VoltaError> {
+    parser::Parser::new(tokens).parse_program().map_err(|e| VoltaError::Parse {
+        span: Span::new(filename, e.line, e.col),
+        msg:  e.msg.clone(),
     })
 }
 
-// ── Error display ─────────────────────────────────────────────────────────────
-
-fn print_error(filename: &str, line: usize, col: usize, msg: &str, hint: &str) {
-    eprintln!("\n\x1b[31merror\x1b[0m: {}", msg);
-    eprintln!("  \x1b[36m-->\x1b[0m {}:{}:{}", filename, line, col);
-    if line > 0 {
-        if let Ok(src) = fs::read_to_string(filename) {
-            if let Some(src_line) = src.lines().nth(line.saturating_sub(1)) {
-                eprintln!("   \x1b[36m|\x1b[0m");
-                eprintln!("\x1b[36m{:3}\x1b[0m\x1b[36m|\x1b[0m {}", line, src_line);
-                let spaces = if col > 1 { col - 1 } else { 0 };
-                eprintln!("   \x1b[36m|\x1b[0m {}\x1b[31m^\x1b[0m", " ".repeat(spaces));
-                eprintln!("   \x1b[36m|\x1b[0m");
-            }
-        }
-    }
-    if !hint.is_empty() {
-        eprintln!("  \x1b[33mhint\x1b[0m: {}", hint);
-    }
-    eprintln!();
-}
-
-fn error_exit(msg: &str) -> ! {
-    eprintln!("\n\x1b[31merror\x1b[0m: {}\n", msg);
-    process::exit(1);
-}
+// ── UI helpers ────────────────────────────────────────────────────────────────
 
 fn print_help() {
     println!("\x1b[1mVolta\x1b[0m {} — a scripting language that compiles to C", VERSION);

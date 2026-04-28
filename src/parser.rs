@@ -12,13 +12,16 @@ pub struct Parser {
 pub struct ParseError {
     pub msg:  String,
     pub line: usize,
+    pub col:  usize,
 }
 
 impl std::fmt::Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "parse error (line {}): {}", self.line, self.msg)
+        write!(f, "parse error (line {}:{}): {}", self.line, self.col, self.msg)
     }
 }
+
+impl std::error::Error for ParseError {}
 
 type PR<T> = Result<T, ParseError>;
 
@@ -27,6 +30,7 @@ impl Parser {
 
     fn peek(&self) -> &TokenKind { &self.tokens[self.pos].kind }
     fn peek_line(&self) -> usize { self.tokens[self.pos].line }
+    fn peek_col(&self)  -> usize { self.tokens[self.pos].col  }
 
     fn advance(&mut self) -> &Token {
         let tok = &self.tokens[self.pos];
@@ -49,19 +53,31 @@ impl Parser {
     fn expect(&mut self, kind: &TokenKind) -> PR<()> {
         self.skip_newlines();
         if self.check(kind) { self.advance(); Ok(()) }
-        else { Err(ParseError { msg: format!("expected {:?}, got {:?}", kind, self.peek()), line: self.peek_line() }) }
+        else { Err(ParseError {
+            msg:  format!("expected {:?}, got {:?}", kind, self.peek()),
+            line: self.peek_line(),
+            col:  self.peek_col(),
+        })}
     }
 
     fn expect_ident(&mut self) -> PR<String> {
         self.skip_newlines();
         if let TokenKind::Ident(name) = self.peek().clone() { self.advance(); Ok(name) }
-        else { Err(ParseError { msg: format!("expected identifier, got {:?}", self.peek()), line: self.peek_line() }) }
+        else { Err(ParseError {
+            msg:  format!("expected identifier, got {:?}", self.peek()),
+            line: self.peek_line(),
+            col:  self.peek_col(),
+        })}
     }
 
     fn expect_string(&mut self) -> PR<String> {
         self.skip_newlines();
         if let TokenKind::StringLit(s) = self.peek().clone() { self.advance(); Ok(s) }
-        else { Err(ParseError { msg: format!("expected string, got {:?}", self.peek()), line: self.peek_line() }) }
+        else { Err(ParseError {
+            msg:  format!("expected string, got {:?}", self.peek()),
+            line: self.peek_line(),
+            col:  self.peek_col(),
+        })}
     }
 
     fn eat_newlines_and(&mut self, kind: &TokenKind) -> bool {
@@ -266,7 +282,7 @@ impl Parser {
             TokenKind::Device => { self.advance(); self.parse_device_block() }
             TokenKind::Ident(ref s) if s == "extern" => { self.advance(); self.parse_extern_block() }
             TokenKind::Ident(ref s) if s == "device" => { self.advance(); self.parse_device_block() }
-            other => Err(ParseError { msg: format!("unknown @ block: {:?}", other), line: self.peek_line() }),
+            other => Err(ParseError { msg: format!("unknown @ block: {:?}", other), line: self.peek_line(), col: self.peek_col() }),
         }
     }
 
@@ -293,14 +309,14 @@ impl Parser {
         let name = self.expect_string()?;
         self.expect(&TokenKind::At)?;
         let address = if let TokenKind::Integer(n) = self.peek().clone() { self.advance(); n as u64 }
-        else { return Err(ParseError { msg: "expected address".into(), line: self.peek_line() }); };
+        else { return Err(ParseError { msg: "expected address".into(), line: self.peek_line(), col: self.peek_col() }); };
         self.expect(&TokenKind::Do)?;
         let mut regs = Vec::new();
         loop {
             self.skip_newlines();
             if matches!(self.peek(), TokenKind::End | TokenKind::Eof) { break; }
             let kw = self.expect_ident()?;
-            if kw != "reg" { return Err(ParseError { msg: format!("expected 'reg'"), line: self.peek_line() }); }
+            if kw != "reg" { return Err(ParseError { msg: "expected 'reg'".into(), line: self.peek_line(), col: self.peek_col() }); }
             let rname = self.expect_ident()?;
             self.expect(&TokenKind::Colon)?;
             let ty = self.expect_ident()?;
@@ -338,11 +354,11 @@ impl Parser {
                     if let Expr::Ident(name) = *target {
                         AssignTarget::Index(name, index)
                     } else {
-                        return Err(ParseError { msg: "invalid assignment target".into(), line: self.peek_line() });
+                        return Err(ParseError { msg: "invalid assignment target".into(), line: self.peek_line(), col: self.peek_col() });
                     }
                 }
                 Expr::Field { target, field } => AssignTarget::Field(target, field),
-                _ => return Err(ParseError { msg: "invalid assignment target".into(), line: self.peek_line() }),
+                _ => return Err(ParseError { msg: "invalid assignment target".into(), line: self.peek_line(), col: self.peek_col() }),
             };
             return Ok(Stmt::Assign { target, value });
         }
@@ -459,7 +475,7 @@ impl Parser {
                     match expr {
                         Expr::Ident(name)             => expr = Expr::Call { name, args },
                         Expr::Field { target, field } => expr = Expr::MethodCall { target, method: field, args },
-                        _ => return Err(ParseError { msg: "can only call named functions".into(), line: self.peek_line() }),
+                        _ => return Err(ParseError { msg: "can only call named functions".into(), line: self.peek_line(), col: self.peek_col() }),
                     }
                 }
                 TokenKind::Dot => {
@@ -514,7 +530,7 @@ impl Parser {
                 self.expect(&TokenKind::RParen)?;
                 Ok(expr)
             }
-            other => Err(ParseError { msg: format!("unexpected token: {:?}", other), line: self.peek_line() }),
+            other => Err(ParseError { msg: format!("unexpected token: {:?}", other), line: self.peek_line(), col: self.peek_col() }),
         }
     }
 
@@ -567,7 +583,7 @@ fn tok_to_binop(tok: &TokenKind) -> BinOp {
         TokenKind::Caret     => BinOp::BitXor,
         TokenKind::ShiftL    => BinOp::ShiftL,
         TokenKind::ShiftR    => BinOp::ShiftR,
-        _ => panic!("not a binop: {:?}", tok),
+        _ => unreachable!("tok_to_binop called on non-operator token: {:?}", tok),
     }
 }
 

@@ -51,6 +51,14 @@ impl SemaError {
     }
 }
 
+impl std::fmt::Display for SemaError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.msg)
+    }
+}
+
+impl std::error::Error for SemaError {}
+
 pub struct Checker {
     // stack of scopes: each is a map from name -> type 
     scopes:   Vec<HashMap<String, VType>>,
