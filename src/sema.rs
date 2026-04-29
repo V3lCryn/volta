@@ -533,29 +533,56 @@ impl Checker {
             Stmt::Match { expr, arms, line } => {
                 self.current_line = *line;
                 let match_ty = self.check_expr(expr);
-                // Validate each arm pattern against the matched enum
                 for arm in arms {
-                    if let MatchPattern::Variant { enum_name, variant } = &arm.pattern {
-                        if let Some(variants) = self.enums.get(enum_name) {
-                            if !variants.contains(variant) {
+                    // Validate pattern type compatibility
+                    match &arm.pattern {
+                        MatchPattern::Variant { enum_name, variant } => {
+                            if let Some(variants) = self.enums.get(enum_name) {
+                                if !variants.contains(variant) {
+                                    self.errors.push(SemaError::new(
+                                        format!("enum '{}' has no variant '{}'", enum_name, variant),
+                                        self.current_line,
+                                        format!("valid variants: {}", variants.join(", ")),
+                                    ));
+                                }
+                            } else if match_ty != VType::Unknown {
                                 self.errors.push(SemaError::new(
-                                    format!("enum '{}' has no variant '{}'", enum_name, variant),
-                                    self.current_line,
-                                    format!("valid variants: {}", variants.join(", ")),
+                                    format!("'{}' is not a known enum", enum_name),
+                                    self.current_line, "",
                                 ));
                             }
-                        } else if match_ty != VType::Unknown {
-                            self.errors.push(SemaError::new(
-                                format!("'{}' is not a known enum", enum_name),
-                                self.current_line, "",
-                            ));
                         }
+                        MatchPattern::Integer(_) | MatchPattern::Range { .. } => {
+                            if !matches!(match_ty, VType::Int | VType::Unknown) {
+                                self.warnings.push(SemaError::new(
+                                    format!("integer pattern used in match on '{}'", match_ty),
+                                    *line, "match subject should be an integer type",
+                                ));
+                            }
+                        }
+                        MatchPattern::Str(_) => {
+                            if !matches!(match_ty, VType::Str | VType::Unknown) {
+                                self.warnings.push(SemaError::new(
+                                    format!("string pattern used in match on '{}'", match_ty),
+                                    *line, "match subject should be a string",
+                                ));
+                            }
+                        }
+                        MatchPattern::Bool(_) => {
+                            if !matches!(match_ty, VType::Bool | VType::Unknown) {
+                                self.warnings.push(SemaError::new(
+                                    format!("bool pattern used in match on '{}'", match_ty),
+                                    *line, "match subject should be a bool",
+                                ));
+                            }
+                        }
+                        MatchPattern::Wildcard => {}
                     }
                     self.push_scope();
                     for s in &arm.body { self.check_stmt(s); }
                     self.pop_scope();
                 }
-                // Exhaustiveness: warn if enum variants aren't all covered
+                // Exhaustiveness check: only meaningful for enum matches
                 if let VType::Enum(enum_name) = &match_ty {
                     let enum_name = enum_name.clone();
                     if let Some(variants) = self.enums.get(&enum_name) {

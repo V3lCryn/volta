@@ -425,13 +425,48 @@ impl Parser {
 
     fn parse_match_pattern(&mut self) -> PR<MatchPattern> {
         self.skip_newlines();
-        let name = self.expect_ident()?;
-        if name == "_" {
-            return Ok(MatchPattern::Wildcard);
+        match self.peek().clone() {
+            // Integer literal — may be followed by a range operator
+            TokenKind::Integer(start) => {
+                self.advance();
+                if self.eat(&TokenKind::DotDotEq) {
+                    // start..=end  (inclusive)
+                    if let TokenKind::Integer(end) = self.peek().clone() {
+                        self.advance();
+                        return Ok(MatchPattern::Range { start, end, inclusive: true });
+                    }
+                    return Err(ParseError { msg: "expected integer after '..='".into(), line: self.peek_line(), col: self.peek_col() });
+                }
+                if self.eat(&TokenKind::DotDot) {
+                    // start..end  (exclusive)
+                    if let TokenKind::Integer(end) = self.peek().clone() {
+                        self.advance();
+                        return Ok(MatchPattern::Range { start, end, inclusive: false });
+                    }
+                    return Err(ParseError { msg: "expected integer after '..'".into(), line: self.peek_line(), col: self.peek_col() });
+                }
+                Ok(MatchPattern::Integer(start))
+            }
+            TokenKind::StringLit(s) => {
+                self.advance();
+                Ok(MatchPattern::Str(s))
+            }
+            TokenKind::Bool(b) => {
+                self.advance();
+                Ok(MatchPattern::Bool(b))
+            }
+            // Ident: either '_' wildcard or 'EnumName.Variant'
+            TokenKind::Ident(_) => {
+                let name = self.expect_ident()?;
+                if name == "_" {
+                    return Ok(MatchPattern::Wildcard);
+                }
+                self.expect(&TokenKind::Dot)?;
+                let variant = self.expect_ident()?;
+                Ok(MatchPattern::Variant { enum_name: name, variant })
+            }
+            _ => Err(ParseError { msg: "expected match pattern (integer, string, bool, range, EnumName.Variant, or _)".into(), line: self.peek_line(), col: self.peek_col() }),
         }
-        self.expect(&TokenKind::Dot)?;
-        let variant = self.expect_ident()?;
-        Ok(MatchPattern::Variant { enum_name: name, variant })
     }
 
     fn parse_defer(&mut self) -> PR<Stmt> {

@@ -254,6 +254,11 @@ pub struct MatchArm {
 pub enum MatchPattern {
     Variant { enum_name: String, variant: String },
     Wildcard,
+    Integer(i64),
+    Str(String),
+    Bool(bool),
+    // Closed integer range: start..end (exclusive) or start..=end (inclusive)
+    Range { start: i64, end: i64, inclusive: bool },
 }
 
 #[derive(Debug, Clone)]

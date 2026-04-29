@@ -1059,31 +1059,54 @@ impl Emitter {
 
             Stmt::Match { expr, arms, .. } => {
                 let e = self.emit_expr(expr);
-                self.iline(&format!("switch ({}) {{", e));
-                self.indent += 1;
+                let mut first = true;
                 for arm in arms {
                     match &arm.pattern {
-                        MatchPattern::Variant { enum_name, variant } => {
-                            let macro_name = format!("{}_{}", enum_name.to_uppercase(), variant.to_uppercase());
-                            self.iline(&format!("case {}: {{", macro_name));
-                        }
                         MatchPattern::Wildcard => {
-                            self.iline("default: {");
+                            // Wildcard must not be first (would shadow all arms above it)
+                            self.iline("} else {");
+                        }
+                        pat => {
+                            let cond = self.match_pattern_cond(pat, &e);
+                            if first {
+                                self.iline(&format!("if ({}) {{", cond));
+                                first = false;
+                            } else {
+                                self.iline(&format!("}} else if ({}) {{", cond));
+                            }
                         }
                     }
                     self.indent += 1;
                     for s in &arm.body { self.emit_stmt(s); }
-                    self.iline("break;");
                     self.indent -= 1;
-                    self.iline("}");
                 }
-                self.indent -= 1;
-                self.iline("}");
+                if !arms.is_empty() { self.iline("}"); }
             }
 
             Stmt::FnDef(_) | Stmt::ExternBlock(_) | Stmt::DeviceBlock(_)
             | Stmt::StructDef(_) | Stmt::PackedStructDef(_) | Stmt::EnumDef(_)
             | Stmt::Const { .. } | Stmt::TypeAlias { .. } => {}
+        }
+    }
+
+    // ── Match helpers ─────────────────────────────────────────────────────────
+
+    /// Build the C boolean condition for a single match pattern.
+    /// `subject` is the already-emitted C expression being matched on.
+    fn match_pattern_cond(&self, pat: &MatchPattern, subject: &str) -> String {
+        match pat {
+            MatchPattern::Variant { enum_name, variant } => {
+                let macro_name = format!("{}_{}", enum_name.to_uppercase(), variant.to_uppercase());
+                format!("{} == {}", subject, macro_name)
+            }
+            MatchPattern::Integer(n) => format!("{} == {}", subject, n),
+            MatchPattern::Bool(b)    => format!("{} == {}", subject, if *b { "true" } else { "false" }),
+            MatchPattern::Str(s)     => format!("strcmp({}, \"{}\") == 0", subject, escape_str(s)),
+            MatchPattern::Range { start, end, inclusive } => {
+                let op = if *inclusive { "<=" } else { "<" };
+                format!("{s} >= {lo} && {s} {op} {hi}", s = subject, lo = start, op = op, hi = end)
+            }
+            MatchPattern::Wildcard => unreachable!("wildcard handled as else branch"),
         }
     }
 
