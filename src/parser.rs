@@ -209,6 +209,7 @@ impl Parser {
             TokenKind::Enum     => self.parse_enum_def(),
             TokenKind::Match    => self.parse_match(),
             TokenKind::Type     => self.parse_type_alias(),
+            TokenKind::Defer    => self.parse_defer(),
             TokenKind::At       => self.parse_at_block(),
             _                   => self.parse_expr_stmt(),
         }
@@ -431,6 +432,13 @@ impl Parser {
         self.expect(&TokenKind::Dot)?;
         let variant = self.expect_ident()?;
         Ok(MatchPattern::Variant { enum_name: name, variant })
+    }
+
+    fn parse_defer(&mut self) -> PR<Stmt> {
+        let line = self.peek_line();
+        self.advance(); // eat 'defer'
+        let expr = self.parse_expr()?;
+        Ok(Stmt::Defer { expr, line })
     }
 
     fn parse_type_alias(&mut self) -> PR<Stmt> {

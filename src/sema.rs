@@ -119,6 +119,7 @@ pub struct Checker {
     pub warnings:     Vec<SemaError>,
     current_line:     usize,
     current_fn_ret:   Option<VType>,
+    in_loop:          usize, // nesting depth; >0 means we're inside a loop
 }
 
 impl Checker {
@@ -134,6 +135,7 @@ impl Checker {
             warnings: Vec::new(),
             current_line: 0,
             current_fn_ret: None,
+            in_loop: 0,
         };
         // Register built-in functions
         c.fn_types.insert("Ok".into(),            VType::Result);
@@ -470,24 +472,41 @@ impl Checker {
             Stmt::While { cond, body, line } => {
                 self.current_line = *line;
                 self.check_expr(cond);
+                self.in_loop += 1;
                 self.push_scope(); for s in body { self.check_stmt(s); } self.pop_scope();
+                self.in_loop -= 1;
             }
             Stmt::For { var, iter, body, line } => {
                 self.current_line = *line;
                 self.check_expr(iter);
+                self.in_loop += 1;
                 self.push_scope();
                 self.define(var, VType::Int);
                 for s in body { self.check_stmt(s); }
                 self.pop_scope();
+                self.in_loop -= 1;
             }
             Stmt::ForIndex { idx, var, iter, body, line } => {
                 self.current_line = *line;
                 self.check_expr(iter);
+                self.in_loop += 1;
                 self.push_scope();
                 self.define(idx, VType::Int);
                 self.define(var, VType::Int);
                 for s in body { self.check_stmt(s); }
                 self.pop_scope();
+                self.in_loop -= 1;
+            }
+            Stmt::Defer { expr, line } => {
+                self.current_line = *line;
+                self.check_expr(expr);
+                if self.in_loop > 0 {
+                    self.warnings.push(SemaError::new(
+                        "defer inside a loop runs once at function exit, not per iteration",
+                        *line,
+                        "use explicit cleanup at the end of the loop body instead",
+                    ));
+                }
             }
             Stmt::ExprStmt(e) => { self.check_expr(e); }
             Stmt::Return(Some(e)) => {

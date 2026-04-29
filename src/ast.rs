@@ -154,6 +154,12 @@ pub enum Stmt {
         line:   usize,
     },
 
+    // defer expr — runs expr at end of enclosing function (LIFO, goto-based transform)
+    Defer {
+        expr: Expr,
+        line: usize,
+    },
+
     ExprStmt(Expr),
     FnDef(FnDef),
     StructDef(StructDef),

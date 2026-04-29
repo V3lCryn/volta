@@ -33,8 +33,13 @@ pub struct Emitter {
     aliases:         HashMap<String, String>, // type alias name → target type string
     tmp_counter:     usize,
     in_result_fn:    bool,
-    closure_buf:     String,   // pending closure C functions (emitted before forward decls)
-    closure_counter: usize,    // sequential id for generated closures
+    // ── Closure hoisting ────────────────────────────────────────────
+    closure_buf:     String,  // pending closure C functions (emitted before forward decls)
+    closure_counter: usize,   // sequential id for generated closures
+    // ── Defer transform state ────────────────────────────────────────
+    current_defers:  Vec<Expr>, // deferred exprs for the current function (LIFO)
+    has_defer:       bool,      // true when inside a function that has defer statements
+    defer_label_id:  usize,     // unique counter for _vdefer_N goto labels
 }
 
 impl Emitter {
@@ -49,6 +54,9 @@ impl Emitter {
             in_result_fn: false,
             closure_buf: String::new(),
             closure_counter: 0,
+            current_defers: Vec::new(),
+            has_defer: false,
+            defer_label_id: 0,
         }
     }
 
@@ -555,6 +563,7 @@ impl Emitter {
             Stmt::Assign { value, .. } => self.prescan_expr(value),
             Stmt::Return(Some(e)) => self.prescan_expr(e),
             Stmt::ExprStmt(e) => self.prescan_expr(e),
+            Stmt::Defer { expr, .. } => self.prescan_expr(expr),
             Stmt::If { cond, then_body, else_ifs, else_body, .. } => {
                 self.prescan_expr(cond);
                 for s in then_body { self.prescan_stmt(s); }
@@ -618,13 +627,12 @@ impl Emitter {
     /// Emit a closure as a static C function into self.closure_buf using the
     /// buffer-swap trick (temporarily redirect self.out).
     fn emit_closure_to_buf(&mut self, params: &[Param], ret_ty: Option<&str>, body: &[Stmt], name: &str) {
-        // Redirect output
+        // Redirect output so closure code lands in closure_buf, not self.out
         let saved_out    = std::mem::take(&mut self.out);
         let saved_indent = self.indent;
         let saved_vtypes = self.var_types.clone();
         let saved_result = self.in_result_fn;
 
-        // Register params so the body can look up their types
         for p in params {
             if let Some(ty) = &p.ty {
                 self.var_types.insert(p.name.clone(), ty.clone());
@@ -637,15 +645,16 @@ impl Emitter {
         self.indent = 0;
         self.line(&format!("static {} {}({}) {{", ret, name, params_str));
         self.indent = 1;
-        for s in body { self.emit_stmt(s); }
+        // Re-use the same defer machinery — closures support defer too.
+        self.emit_body_with_defers(body, &ret.clone());
         self.indent = 0;
         self.line("}");
 
-        // Harvest and restore
-        let closure_code = std::mem::take(&mut self.out);
-        self.out         = saved_out;
-        self.indent      = saved_indent;
-        self.var_types   = saved_vtypes;
+        // Harvest generated code and restore state
+        let closure_code  = std::mem::take(&mut self.out);
+        self.out          = saved_out;
+        self.indent       = saved_indent;
+        self.var_types    = saved_vtypes;
         self.in_result_fn = saved_result;
         self.closure_buf.push_str(&closure_code);
         self.closure_buf.push('\n');
@@ -724,22 +733,78 @@ impl Emitter {
     // ── Function ──────────────────────────────────────────────────────────────
 
     fn emit_fn_def(&mut self, f: &FnDef) {
-        let ret = self.resolve_ty(f.ret_ty.as_deref());
+        let ret    = self.resolve_ty(f.ret_ty.as_deref());
         let params = self.emit_params(&f.params);
-        let safe = Self::safe_name(&f.name);
+        let safe   = Self::safe_name(&f.name);
         self.line(&format!("{} {}({}) {{", ret, safe, params));
         self.indent += 1;
         let prev_result_fn = self.in_result_fn;
-        self.in_result_fn = f.ret_ty.as_deref() == Some("Result");
+        self.in_result_fn  = f.ret_ty.as_deref() == Some("Result");
         for p in &f.params {
             if let Some(ty) = &p.ty {
                 self.var_types.insert(p.name.clone(), ty.clone());
             }
         }
-        for stmt in &f.body { self.emit_stmt(stmt); }
+        self.emit_body_with_defers(&f.body, &ret.clone());
         self.in_result_fn = prev_result_fn;
         self.indent -= 1;
         self.line("}");
+    }
+
+    /// Emit a list of statements with defer-transform support.
+    ///
+    /// If the body contains `Stmt::Defer` nodes (at any nesting depth), the
+    /// function:
+    ///  1. Emits a zero-initialised `_vdefer_ret` variable for non-void fns.
+    ///  2. Transforms every `Stmt::Return` into a store + `goto _vdefer_N`.
+    ///  3. Emits the cleanup label after the body, runs deferred exprs LIFO,
+    ///     then emits the actual `return _vdefer_ret;` (or just falls off for void).
+    ///
+    /// When there are no defers the body is emitted as-is — zero overhead.
+    fn emit_body_with_defers(&mut self, stmts: &[Stmt], ret_c: &str) {
+        let defers    = collect_defers(stmts);
+        let has_defer = !defers.is_empty();
+
+        // Save and update defer context
+        let prev_defers    = std::mem::take(&mut self.current_defers);
+        let prev_has_defer = self.has_defer;
+
+        let label_id = if has_defer {
+            self.defer_label_id += 1;
+            self.defer_label_id
+        } else {
+            0
+        };
+
+        if has_defer {
+            self.has_defer      = true;
+            self.current_defers = defers;
+            // Allocate a slot to capture the return value
+            if ret_c != "void" {
+                let init = default_value_for_c_type(ret_c);
+                self.iline(&format!("{} _vdefer_ret = {};", ret_c, init));
+            }
+        }
+
+        for stmt in stmts { self.emit_stmt(stmt); }
+
+        if has_defer {
+            // Both early returns (via goto) and natural fallthrough land here.
+            self.iline(&format!("_vdefer_{}: ;", label_id));
+            // Run deferred expressions in LIFO order (snapshot to avoid borrow issue)
+            let defers_snap = self.current_defers.clone();
+            for expr in defers_snap.iter().rev() {
+                let e = self.emit_expr(expr);
+                self.iline(&format!("{};", e));
+            }
+            if ret_c != "void" {
+                self.iline("return _vdefer_ret;");
+            }
+        }
+
+        // Restore context
+        self.current_defers = prev_defers;
+        self.has_defer      = prev_has_defer;
     }
 
     // ── Statements ────────────────────────────────────────────────────────────
@@ -902,8 +967,27 @@ impl Emitter {
                 }
             }
 
-            Stmt::Return(None)       => self.iline("return;"),
-            Stmt::Return(Some(expr)) => { let v = self.emit_expr(expr); self.iline(&format!("return {};", v)); }
+            Stmt::Return(None) => {
+                if self.has_defer {
+                    // Jump to cleanup block; void functions just fall off after it.
+                    self.iline(&format!("goto _vdefer_{};", self.defer_label_id));
+                } else {
+                    self.iline("return;");
+                }
+            }
+            Stmt::Return(Some(expr)) => {
+                let v = self.emit_expr(expr);
+                if self.has_defer {
+                    // Store return value, then jump to cleanup block.
+                    self.iline(&format!("_vdefer_ret = {};", v));
+                    self.iline(&format!("goto _vdefer_{};", self.defer_label_id));
+                } else {
+                    self.iline(&format!("return {};", v));
+                }
+            }
+            // Defer expressions are collected by emit_body_with_defers; nothing
+            // to emit at the point where 'defer' appears in the source.
+            Stmt::Defer { .. } => {}
             Stmt::Break              => self.iline("break;"),
             Stmt::Continue           => self.iline("continue;"),
 
@@ -1451,6 +1535,41 @@ fn parse_fn_ptr_ty(ty: &str) -> Option<(Vec<String>, String)> {
     let after = &rest[close+1..];
     let ret = if after.starts_with("->") { after[2..].to_string() } else { "nil".to_string() };
     Some((params, ret))
+}
+
+/// Recursively collect all `Stmt::Defer` expressions from a statement list.
+/// The order matches source order; callers reverse for LIFO execution.
+fn collect_defers(stmts: &[Stmt]) -> Vec<Expr> {
+    let mut out = Vec::new();
+    collect_defers_rec(stmts, &mut out);
+    out
+}
+
+fn collect_defers_rec(stmts: &[Stmt], out: &mut Vec<Expr>) {
+    for stmt in stmts {
+        match stmt {
+            Stmt::Defer { expr, .. } => out.push(expr.clone()),
+            Stmt::If { then_body, else_ifs, else_body, .. } => {
+                collect_defers_rec(then_body, out);
+                for (_, b) in else_ifs { collect_defers_rec(b, out); }
+                if let Some(b) = else_body { collect_defers_rec(b, out); }
+            }
+            Stmt::While { body, .. }
+            | Stmt::For { body, .. }
+            | Stmt::ForIndex { body, .. } => collect_defers_rec(body, out),
+            Stmt::Match { arms, .. } => {
+                for arm in arms { collect_defers_rec(&arm.body, out); }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Return a safe zero initialiser for a C type string.
+/// Used to pre-initialise the `_vdefer_ret` variable before any goto.
+fn default_value_for_c_type(c_ty: &str) -> &'static str {
+    if c_ty.ends_with('*') { "NULL" }
+    else { "{0}" }  // valid C99 zero-initialiser for scalars and structs alike
 }
 
 fn binop_sym(op: &BinOp) -> &'static str {
