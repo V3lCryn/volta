@@ -197,6 +197,8 @@ impl Checker {
         c.fn_types.insert("str_index_of".into(),    VType::Int);
         c.fn_types.insert("str_trim".into(),        VType::Str);
         c.fn_types.insert("str_split_at".into(),    VType::Str);
+        c.fn_types.insert("str_split".into(),       VType::Array("str".into()));
+        c.fn_types.insert("str_join".into(),        VType::Str);
         // crypto stdlib
         c.fn_types.insert("xor_encrypt".into(),     VType::Str);
         c.fn_types.insert("str_to_hex_str".into(),  VType::Str);

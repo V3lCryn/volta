@@ -87,6 +87,12 @@ impl Emitter {
         self.fn_types.insert("arena_alloc".into(),     "void*".into());
         self.fn_types.insert("arena_reset".into(),     "void".into());
         self.fn_types.insert("arena_free_all".into(),  "void".into());
+        // String utilities
+        self.fn_types.insert("str_split".into(),       "VArray".into());
+        self.fn_types.insert("str_join".into(),        "const char*".into());
+        self.fn_types.insert("str_trim".into(),        "const char*".into());
+        self.fn_types.insert("str_starts_with".into(), "bool".into());
+        self.fn_types.insert("str_ends_with".into(),   "bool".into());
 
         for stmt in &prog.stmts {
             // Collect type aliases first so resolve_ty can use them
@@ -382,6 +388,14 @@ impl Emitter {
         self.line(r#"static void pg_free(void){if(_pg_res){PQclear(_pg_res);_pg_res=NULL;}}"#);
         self.line(r#"static bool pg_exec(const char* sql){if(!_pg_conn)return false;PGresult*r=PQexec(_pg_conn,sql);bool ok=PQresultStatus(r)==PGRES_COMMAND_OK||PQresultStatus(r)==PGRES_TUPLES_OK;PQclear(r);return ok;}"#);
         self.line(r#"static const char* pg_escape(const char* s){static char buf[8192];size_t err;PQescapeStringConn(_pg_conn,buf,s,strlen(s),NULL);(void)err;return buf;}"#);
+        // ── String utilities ─────────────────────────────────────────
+        self.line(r#"static bool str_starts_with(const char*s,const char*p){return strncmp(s,p,strlen(p))==0;}"#);
+        self.line(r#"static bool str_ends_with(const char*s,const char*x){int64_t sl=(int64_t)strlen(s),xl=(int64_t)strlen(x);return sl>=xl&&strcmp(s+sl-xl,x)==0;}"#);
+        self.line(r#"static const char* str_trim(const char*s){while(*s==' '||*s=='\t'||*s=='\r'||*s=='\n')s++;int64_t l=(int64_t)strlen(s);while(l>0&&(s[l-1]==' '||s[l-1]=='\t'||s[l-1]=='\r'||s[l-1]=='\n'))l--;char*d=_vbuf+_vpos;memcpy(d,s,l);d[l]='\0';_vpos=(_vpos+l+1)%131072;return d;}"#);
+        // str_split: split s on any byte in delim, return VArray of const char* slices stored in _vbuf
+        self.line(r#"static VArray str_split(const char*s,const char*delim){VArray a=_arr_new(8);char*copy=(char*)malloc(strlen(s)+1);if(!copy)return a;strcpy(copy,s);char*tok=strtok(copy,delim);while(tok){int64_t tl=(int64_t)strlen(tok);char*d=_vbuf+_vpos;memcpy(d,tok,tl+1);_vpos=(_vpos+tl+1)%131072;_arr_push(&a,(void*)d);tok=strtok(NULL,delim);}free(copy);return a;}"#);
+        // str_join: join a VArray of strings with delim into a single _vbuf string
+        self.line(r#"static const char* str_join(VArray a,const char*delim){char*d=_vbuf+_vpos;int64_t pos=0,dl=(int64_t)strlen(delim);for(int64_t i=0;i<a.len;i++){const char*s2=(const char*)_arr_get(&a,i);int64_t sl=(int64_t)strlen(s2);if(pos+sl+dl+1>=65000)break;if(i>0){memcpy(d+pos,delim,dl);pos+=dl;}memcpy(d+pos,s2,sl);pos+=sl;}d[pos]='\0';_vpos=(_vpos+pos+1)%131072;return d;}"#);
         // ── Arena allocator ──────────────────────────────────────────
         self.line(r#"typedef struct{char*buf;int64_t cap;int64_t pos;}VArena;"#);
         self.line(r#"static VArena arena_new(int64_t cap){VArena a;a.buf=(char*)malloc((size_t)cap);a.cap=cap;a.pos=0;return a;}"#);
@@ -1141,6 +1155,7 @@ impl Emitter {
                         "str_reverse","str_repeat","str_slice","str_replace","char_from",
                         "rot13","caesar","xor_str","hex","bytes_to_hex","str_to_hex_str",
                         "arg_get","input","xor_encrypt","str_to_hex",
+                        "str_join","str_trim",
                     ];
                     const BOOL_FNS: &[&str] = &[
                         "is_prime","is_even","is_odd","looks_base64","looks_encrypted",
