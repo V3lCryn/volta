@@ -12,12 +12,16 @@ pub enum VType {
     Enum(String),
     Array(String),    // element type name, e.g. "i64", "str"
     Pointer(String),  // pointee type name, e.g. "i64" for *i64
+    FnPtr(String),    // raw fn ptr type string, e.g. "fn(i64)->bool"
     Result,
     Unknown,
 }
 
 impl VType {
     pub fn from_str(s: &str) -> Self {
+        if s.starts_with("fn(") {
+            return VType::FnPtr(s.to_string());
+        }
         if s.starts_with('*') {
             return VType::Pointer(s[1..].to_string());
         }
@@ -52,6 +56,7 @@ impl VType {
             VType::Enum(s)      => s.clone(),
             VType::Array(e)     => format!("[{}]", e),
             VType::Pointer(t)   => format!("*{}", t),
+            VType::FnPtr(s)     => s.clone(),
             VType::Result       => "Result".into(),
             VType::Unknown      => "?".into(),
         }
@@ -79,12 +84,37 @@ impl std::fmt::Display for SemaError {
 
 impl std::error::Error for SemaError {}
 
+// Parse "fn(i64,str)->bool" → (["i64","str"], "bool")
+pub fn parse_fn_ptr_ty(ty: &str) -> Option<(Vec<String>, String)> {
+    if !ty.starts_with("fn(") { return None; }
+    let rest = &ty[3..];
+    let mut depth = 1usize;
+    let mut close = rest.len();
+    for (i, c) in rest.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => { depth -= 1; if depth == 0 { close = i; break; } }
+            _ => {}
+        }
+    }
+    let params_str = &rest[..close];
+    let params: Vec<String> = if params_str.is_empty() {
+        vec![]
+    } else {
+        params_str.split(',').map(|s| s.trim().to_string()).collect()
+    };
+    let after = &rest[close+1..];
+    let ret = if after.starts_with("->") { after[2..].to_string() } else { "nil".to_string() };
+    Some((params, ret))
+}
+
 pub struct Checker {
     scopes:           Vec<HashMap<String, VType>>,
     fn_types:         HashMap<String, VType>,
     fn_param_counts:  HashMap<String, usize>,
     structs:          HashMap<String, Vec<(String, VType)>>,
     enums:            HashMap<String, Vec<String>>,
+    aliases:          HashMap<String, String>, // type aliases: name → target
     pub errors:       Vec<SemaError>,
     pub warnings:     Vec<SemaError>,
     current_line:     usize,
@@ -99,6 +129,7 @@ impl Checker {
             fn_param_counts: HashMap::new(),
             structs: HashMap::new(),
             enums: HashMap::new(),
+            aliases: HashMap::new(),
             errors: Vec::new(),
             warnings: Vec::new(),
             current_line: 0,
@@ -216,7 +247,22 @@ impl Checker {
         c
     }
 
+    // Resolve a type string, honouring type aliases.
+    fn resolve_type_str(&self, s: &str) -> VType {
+        if let Some(target) = self.aliases.get(s) {
+            VType::from_str(target)
+        } else {
+            VType::from_str(s)
+        }
+    }
+
     pub fn check_program(&mut self, prog: &Program) {
+        // Pre-pass: collect type aliases so they're available everywhere
+        for stmt in &prog.stmts {
+            if let Stmt::TypeAlias { name, target, .. } = stmt {
+                self.aliases.insert(name.clone(), target.clone());
+            }
+        }
         // First pass: register all type signatures
         for stmt in &prog.stmts {
             match stmt {
@@ -236,13 +282,13 @@ impl Checker {
                     self.define(name, val_ty);
                 }
                 Stmt::FnDef(f) => {
-                    let ret = f.ret_ty.as_deref().map(VType::from_str).unwrap_or(VType::Nil);
+                    let ret = f.ret_ty.as_deref().map(|t| self.resolve_type_str(t)).unwrap_or(VType::Nil);
                     self.fn_types.insert(f.name.clone(), ret);
                     self.fn_param_counts.insert(f.name.clone(), f.params.len());
                 }
                 Stmt::StructDef(s) => {
                     let fields = s.fields.iter()
-                        .map(|(n, t)| (n.clone(), VType::from_str(t)))
+                        .map(|(n, t)| (n.clone(), self.resolve_type_str(t)))
                         .collect();
                     self.structs.insert(s.name.clone(), fields);
                 }
@@ -257,10 +303,11 @@ impl Checker {
                 }
                 Stmt::ExternBlock(eb) => {
                     for f in &eb.fns {
-                        let ret = f.ret_ty.as_deref().map(VType::from_str).unwrap_or(VType::Nil);
+                        let ret = f.ret_ty.as_deref().map(|t| self.resolve_type_str(t)).unwrap_or(VType::Nil);
                         self.fn_types.insert(f.name.clone(), ret);
                     }
                 }
+                Stmt::TypeAlias { .. } => {} // already handled in pre-pass
                 _ => {}
             }
         }
@@ -290,10 +337,22 @@ impl Checker {
                 self.current_line = *line;
                 let val_ty = self.check_expr(value);
                 if let Some(ann) = ty {
-                    let ann_ty = VType::from_str(ann);
+                    let ann_ty = self.resolve_type_str(ann);
+                    // If it's a function pointer, register return type in fn_types
+                    // so calls through this variable resolve correctly
+                    if let VType::FnPtr(ref fp_str) = ann_ty {
+                        if let Some((_, ret)) = parse_fn_ptr_ty(fp_str) {
+                            self.fn_types.insert(name.clone(), self.resolve_type_str(&ret));
+                            self.fn_param_counts.insert(name.clone(), {
+                                parse_fn_ptr_ty(fp_str).map(|(p, _)| p.len()).unwrap_or(0)
+                            });
+                        }
+                    }
                     // Array annotations are always compatible with array literals
-                    let is_array_ann = matches!(&ann_ty, VType::Array(_));
-                    if !is_array_ann
+                    let is_array_ann  = matches!(&ann_ty, VType::Array(_));
+                    let is_fnptr_ann  = matches!(&ann_ty, VType::FnPtr(_));
+                    let is_ptr_ann    = matches!(&ann_ty, VType::Pointer(_));
+                    if !is_array_ann && !is_fnptr_ann && !is_ptr_ann
                        && ann_ty != VType::Unknown && val_ty != VType::Unknown
                        && ann_ty != val_ty && val_ty != VType::Nil {
                         let ok = matches!((&ann_ty, &val_ty), (VType::Float, VType::Int) | (VType::Int, VType::Float));
@@ -367,7 +426,15 @@ impl Checker {
                 let prev_ret = self.current_fn_ret.take();
                 self.current_fn_ret = f.ret_ty.as_deref().map(VType::from_str);
                 for p in &f.params {
-                    let ty = p.ty.as_deref().map(VType::from_str).unwrap_or(VType::Unknown);
+                    let ty = p.ty.as_deref().map(|t| self.resolve_type_str(t)).unwrap_or(VType::Unknown);
+                    // fn ptr params: register in fn_types so calls through them work
+                    if let VType::FnPtr(ref fp_str) = ty {
+                        if let Some((_, ret)) = parse_fn_ptr_ty(fp_str) {
+                            self.fn_types.insert(p.name.clone(), self.resolve_type_str(&ret));
+                            self.fn_param_counts.insert(p.name.clone(),
+                                parse_fn_ptr_ty(fp_str).map(|(ps, _)| ps.len()).unwrap_or(0));
+                        }
+                    }
                     self.define(&p.name, ty);
                 }
                 for s in &f.body { self.check_stmt(s); }
@@ -436,7 +503,7 @@ impl Checker {
                 }
             }
             Stmt::Return(None) => {}
-            Stmt::EnumDef(_) | Stmt::PackedStructDef(_) => {} // registered in first pass
+            Stmt::EnumDef(_) | Stmt::PackedStructDef(_) | Stmt::TypeAlias { .. } => {} // registered in first pass
             Stmt::Match { expr, arms, line } => {
                 self.current_line = *line;
                 let match_ty = self.check_expr(expr);
@@ -461,6 +528,28 @@ impl Checker {
                     self.push_scope();
                     for s in &arm.body { self.check_stmt(s); }
                     self.pop_scope();
+                }
+                // Exhaustiveness: warn if enum variants aren't all covered
+                if let VType::Enum(enum_name) = &match_ty {
+                    let enum_name = enum_name.clone();
+                    if let Some(variants) = self.enums.get(&enum_name) {
+                        let variants = variants.clone();
+                        let has_wildcard = arms.iter().any(|a| matches!(a.pattern, MatchPattern::Wildcard));
+                        if !has_wildcard {
+                            let covered: Vec<&String> = arms.iter().filter_map(|a| {
+                                if let MatchPattern::Variant { variant, .. } = &a.pattern { Some(variant) } else { None }
+                            }).collect();
+                            for v in &variants {
+                                if !covered.contains(&v) {
+                                    self.warnings.push(SemaError::new(
+                                        format!("match on '{}' does not cover variant '{}'", enum_name, v),
+                                        *line,
+                                        format!("add a '{}.{}' arm or a wildcard '_'", enum_name, v),
+                                    ));
+                                }
+                            }
+                        }
+                    }
                 }
             }
             _ => {}
@@ -615,9 +704,20 @@ impl Checker {
                         }
                     }
                 }
-                // Struct field access
                 let t = self.check_expr(target);
-                if let VType::Struct(sname) = &t {
+                // Direct struct field access
+                let sname = match &t {
+                    VType::Struct(s) => Some(s.clone()),
+                    // Pointer-to-struct auto-deref: *Struct → look up Struct's fields
+                    VType::Pointer(inner) => {
+                        match self.resolve_type_str(inner) {
+                            VType::Struct(s) => Some(s),
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                };
+                if let Some(sname) = sname {
                     if let Some(fields) = self.structs.get(sname.as_str()) {
                         if let Some((_, ft)) = fields.iter().find(|(n, _)| n == field) {
                             return ft.clone();

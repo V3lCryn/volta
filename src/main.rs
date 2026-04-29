@@ -288,7 +288,8 @@ fn collect_stmts(
                 | ast::Stmt::PackedStructDef(_)
                 | ast::Stmt::EnumDef(_)
                 | ast::Stmt::ExternBlock(_)
-                | ast::Stmt::DeviceBlock(_) => { all_stmts.push(stmt); }
+                | ast::Stmt::DeviceBlock(_)
+                | ast::Stmt::TypeAlias { .. } => { all_stmts.push(stmt); }
                 _ => {}
             }
         }

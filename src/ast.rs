@@ -141,6 +141,12 @@ pub enum Stmt {
         line:  usize,
     },
 
+    TypeAlias {
+        name:   String,  // alias name, e.g. "Fd"
+        target: String,  // target type, e.g. "i64"
+        line:   usize,
+    },
+
     ExprStmt(Expr),
     FnDef(FnDef),
     StructDef(StructDef),

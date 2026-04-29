@@ -30,6 +30,7 @@ pub struct Emitter {
     struct_defs:   HashMap<String, Vec<(String, String)>>,
     struct_names:  HashSet<String>,
     enum_defs:     HashMap<String, Vec<String>>,
+    aliases:       HashMap<String, String>, // type alias name → target type string
     tmp_counter:   usize,
     in_result_fn:  bool,
 }
@@ -41,6 +42,7 @@ impl Emitter {
             fn_types: HashMap::new(), var_types: HashMap::new(),
             struct_defs: HashMap::new(), struct_names: HashSet::new(),
             enum_defs: HashMap::new(),
+            aliases: HashMap::new(),
             tmp_counter: 0,
             in_result_fn: false,
         }
@@ -63,6 +65,14 @@ impl Emitter {
         self.emit_runtime();
 
         // First pass: collect all type info
+        for stmt in &prog.stmts {
+            // Collect type aliases first so resolve_ty can use them
+            if let Stmt::TypeAlias { name, target, .. } = stmt {
+                self.aliases.insert(name.clone(), target.clone());
+                // Register as a known name so it's not treated as unknown
+                self.struct_names.insert(name.clone());
+            }
+        }
         for stmt in &prog.stmts {
             match stmt {
                 Stmt::StructDef(s) => {
@@ -109,6 +119,17 @@ impl Emitter {
             }
         }
         if had_const { self.line(""); }
+
+        // Type alias typedefs
+        let mut had_alias = false;
+        for stmt in &prog.stmts {
+            if let Stmt::TypeAlias { name, target, .. } = stmt {
+                let c_ty = self.resolve_ty(Some(target));
+                self.line(&format!("typedef {} {};", c_ty, name));
+                had_alias = true;
+            }
+        }
+        if had_alias { self.line(""); }
 
         // Struct definitions
         for stmt in &prog.stmts {
@@ -157,7 +178,7 @@ impl Emitter {
         let top: Vec<&Stmt> = prog.stmts.iter().filter(|s|
             !matches!(s, Stmt::FnDef(_)|Stmt::ExternBlock(_)|Stmt::DeviceBlock(_)
                        |Stmt::StructDef(_)|Stmt::PackedStructDef(_)|Stmt::EnumDef(_)
-                       |Stmt::Const { .. })
+                       |Stmt::Const { .. }|Stmt::TypeAlias { .. })
         ).collect();
 
         if !top.is_empty() {
@@ -340,6 +361,12 @@ impl Emitter {
     // ── Type resolution ───────────────────────────────────────────────────────
 
     fn resolve_ty(&self, ty: Option<&str>) -> String {
+        // Resolve type aliases first
+        if let Some(name) = ty {
+            if let Some(target) = self.aliases.get(name) {
+                return self.resolve_ty(Some(target));
+            }
+        }
         match ty {
             None | Some("nil")        => "void".into(),
             Some("i8")                => "int8_t".into(),
@@ -356,6 +383,11 @@ impl Emitter {
             Some("str")               => "const char*".into(),
             Some("ptr")               => "void*".into(),
             Some("Result")            => "VResult".into(),
+            Some(fp) if fp.starts_with("fn(") => {
+                // Function pointer used in a generic type position (e.g. struct field)
+                // Emit as void* — proper syntax handled in Let/params
+                "void*".into()
+            }
             Some(ptr) if ptr.starts_with('*') => {
                 // Pointer type: *i64 → int64_t*, **u8 → uint8_t**, *str → const char**
                 let inner = &ptr[1..];
@@ -569,6 +601,23 @@ impl Emitter {
                     }
                 }
 
+                // Special case: function pointer variable
+                if let Some(ty_str) = ty {
+                    if ty_str.starts_with("fn(") {
+                        if let Some((inner_params, ret)) = parse_fn_ptr_ty(ty_str) {
+                            let ret_c = self.resolve_ty(Some(&ret));
+                            let pc: Vec<String> = inner_params.iter()
+                                .map(|t| self.resolve_ty(Some(t))).collect();
+                            let val = self.emit_expr(value);
+                            self.iline(&format!("{} (*{})({}) = {};", ret_c, name, pc.join(", "), val));
+                            self.var_types.insert(name.clone(), ty_str.clone());
+                            // Register return type so calls through this var infer correctly
+                            self.fn_types.insert(name.clone(), ret_c);
+                            return;
+                        }
+                    }
+                }
+
                 // Special case: fixed-size array [T; N]
                 if let Some(ty_str) = ty {
                     if ty_str.starts_with('[') && ty_str.contains(';') {
@@ -759,7 +808,7 @@ impl Emitter {
 
             Stmt::FnDef(_) | Stmt::ExternBlock(_) | Stmt::DeviceBlock(_)
             | Stmt::StructDef(_) | Stmt::PackedStructDef(_) | Stmt::EnumDef(_)
-            | Stmt::Const { .. } => {}
+            | Stmt::Const { .. } | Stmt::TypeAlias { .. } => {}
         }
     }
 
@@ -1143,6 +1192,16 @@ impl Emitter {
     fn emit_params(&self, params: &[Param]) -> String {
         if params.is_empty() { return "void".into(); }
         params.iter().map(|p| {
+            if let Some(ty_str) = &p.ty {
+                if ty_str.starts_with("fn(") {
+                    if let Some((inner_params, ret)) = parse_fn_ptr_ty(ty_str) {
+                        let ret_c = self.resolve_ty(Some(&ret));
+                        let pc: Vec<String> = inner_params.iter()
+                            .map(|t| self.resolve_ty(Some(t))).collect();
+                        return format!("{} (*{})({})", ret_c, p.name, pc.join(", "));
+                    }
+                }
+            }
             let ty = self.resolve_ty(p.ty.as_deref());
             let ty = if ty == "void" { "int64_t".to_string() } else { ty };
             format!("{} {}", ty, p.name)
@@ -1160,6 +1219,30 @@ impl Emitter {
 }
 
 // ── Pure helpers ──────────────────────────────────────────────────────────────
+
+// Parse "fn(i64,str)->bool" → (["i64","str"], "bool")
+fn parse_fn_ptr_ty(ty: &str) -> Option<(Vec<String>, String)> {
+    if !ty.starts_with("fn(") { return None; }
+    let rest = &ty[3..];
+    let mut depth = 1usize;
+    let mut close = rest.len();
+    for (i, c) in rest.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => { depth -= 1; if depth == 0 { close = i; break; } }
+            _ => {}
+        }
+    }
+    let params_str = &rest[..close];
+    let params: Vec<String> = if params_str.is_empty() {
+        vec![]
+    } else {
+        params_str.split(',').map(|s| s.trim().to_string()).collect()
+    };
+    let after = &rest[close+1..];
+    let ret = if after.starts_with("->") { after[2..].to_string() } else { "nil".to_string() };
+    Some((params, ret))
+}
 
 fn binop_sym(op: &BinOp) -> &'static str {
     match op {

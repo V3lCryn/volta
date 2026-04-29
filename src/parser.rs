@@ -81,16 +81,38 @@ impl Parser {
     }
 
     // Parse a type name:
-    //   ident          → plain type
-    //   *T             → pointer to T (recursive, so **T works)
-    //   [ident]        → dynamic typed array
-    //   [ident; N]     → fixed-size stack array
+    //   ident              → plain type
+    //   *T                 → pointer to T (recursive, so **T works)
+    //   [ident]            → dynamic typed array
+    //   [ident; N]         → fixed-size stack array
+    //   fn(T, U) -> R      → function pointer type
     fn parse_type(&mut self) -> PR<String> {
         self.skip_newlines();
         if self.check(&TokenKind::Star) {
             self.advance();
             let inner = self.parse_type()?;
             return Ok(format!("*{}", inner));
+        }
+        // Function pointer type: fn(T, U) -> R
+        if self.check(&TokenKind::Fn) {
+            self.advance(); // eat 'fn'
+            self.expect(&TokenKind::LParen)?;
+            let mut param_types: Vec<String> = Vec::new();
+            self.skip_newlines();
+            if !self.check(&TokenKind::RParen) {
+                loop {
+                    param_types.push(self.parse_type()?);
+                    if !self.eat(&TokenKind::Comma) { break; }
+                    self.skip_newlines();
+                }
+            }
+            self.expect(&TokenKind::RParen)?;
+            let ret = if self.eat(&TokenKind::Arrow) {
+                self.parse_type()?
+            } else {
+                "nil".to_string()
+            };
+            return Ok(format!("fn({})->{}", param_types.join(","), ret));
         }
         if self.check(&TokenKind::LBracket) {
             self.advance();
@@ -186,6 +208,7 @@ impl Parser {
             TokenKind::Packed   => self.parse_packed_struct_def(),
             TokenKind::Enum     => self.parse_enum_def(),
             TokenKind::Match    => self.parse_match(),
+            TokenKind::Type     => self.parse_type_alias(),
             TokenKind::At       => self.parse_at_block(),
             _                   => self.parse_expr_stmt(),
         }
@@ -408,6 +431,15 @@ impl Parser {
         self.expect(&TokenKind::Dot)?;
         let variant = self.expect_ident()?;
         Ok(MatchPattern::Variant { enum_name: name, variant })
+    }
+
+    fn parse_type_alias(&mut self) -> PR<Stmt> {
+        let line = self.peek_line();
+        self.advance(); // eat 'type'
+        let name = self.expect_ident()?;
+        self.expect(&TokenKind::Eq)?;
+        let target = self.parse_type()?;
+        Ok(Stmt::TypeAlias { name, target, line })
     }
 
     fn parse_at_block(&mut self) -> PR<Stmt> {
