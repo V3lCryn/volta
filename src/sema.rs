@@ -199,6 +199,16 @@ impl Checker {
         c.fn_types.insert("str_split_at".into(),    VType::Str);
         c.fn_types.insert("str_split".into(),       VType::Array("str".into()));
         c.fn_types.insert("str_join".into(),        VType::Str);
+        // Hash map
+        c.fn_types.insert("map_new".into(),         VType::Struct("VMap".into()));
+        c.fn_types.insert("map_set".into(),         VType::Nil);
+        c.fn_types.insert("map_get_int".into(),     VType::Int);
+        c.fn_types.insert("map_get_str".into(),     VType::Str);
+        c.fn_types.insert("map_has".into(),         VType::Bool);
+        c.fn_types.insert("map_del".into(),         VType::Nil);
+        c.fn_types.insert("map_len".into(),         VType::Int);
+        c.fn_types.insert("map_keys".into(),        VType::Array("str".into()));
+        c.fn_types.insert("map_free".into(),        VType::Nil);
         // crypto stdlib
         c.fn_types.insert("xor_encrypt".into(),     VType::Str);
         c.fn_types.insert("str_to_hex_str".into(),  VType::Str);

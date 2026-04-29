@@ -80,6 +80,7 @@ impl Emitter {
         // Register runtime struct types so resolve_ty recognises them
         self.struct_names.insert("VArena".into());
         self.struct_names.insert("VClosure".into());
+        self.struct_names.insert("VMap".into());
         // Register memory / arena builtins so infer_type works on their calls
         self.fn_types.insert("alloc".into(),           "void*".into());
         self.fn_types.insert("free".into(),            "void".into());
@@ -93,6 +94,13 @@ impl Emitter {
         self.fn_types.insert("str_trim".into(),        "const char*".into());
         self.fn_types.insert("str_starts_with".into(), "bool".into());
         self.fn_types.insert("str_ends_with".into(),   "bool".into());
+        // Hash map
+        self.fn_types.insert("map_new".into(),         "VMap".into());
+        self.fn_types.insert("map_get_int".into(),     "int64_t".into());
+        self.fn_types.insert("map_get_str".into(),     "const char*".into());
+        self.fn_types.insert("map_has".into(),         "bool".into());
+        self.fn_types.insert("map_len".into(),         "int64_t".into());
+        self.fn_types.insert("map_keys".into(),        "VArray".into());
 
         for stmt in &prog.stmts {
             // Collect type aliases first so resolve_ty can use them
@@ -388,6 +396,24 @@ impl Emitter {
         self.line(r#"static void pg_free(void){if(_pg_res){PQclear(_pg_res);_pg_res=NULL;}}"#);
         self.line(r#"static bool pg_exec(const char* sql){if(!_pg_conn)return false;PGresult*r=PQexec(_pg_conn,sql);bool ok=PQresultStatus(r)==PGRES_COMMAND_OK||PQresultStatus(r)==PGRES_TUPLES_OK;PQclear(r);return ok;}"#);
         self.line(r#"static const char* pg_escape(const char* s){static char buf[8192];size_t err;PQescapeStringConn(_pg_conn,buf,s,strlen(s),NULL);(void)err;return buf;}"#);
+        // ── Hash map (separate chaining, FNV-1a, string keys) ────────
+        self.line(r#"typedef struct _VMapNode{const char*key;void*val;struct _VMapNode*next;}_VMapNode;"#);
+        self.line(r#"typedef struct{_VMapNode**buckets;int64_t cap;int64_t len;}VMap;"#);
+        self.line(r#"static uint64_t _vmhash(const char*s){uint64_t h=14695981039346656037ULL;for(;*s;s++){h^=(uint8_t)*s;h*=1099511628211ULL;}return h;}"#);
+        self.line(r#"static VMap map_new(void){VMap m;m.cap=16;m.len=0;m.buckets=(_VMapNode**)calloc(16,sizeof(_VMapNode*));return m;}"#);
+        // _vmap_set: insert or update; resizes at load factor 1
+        self.line(r#"static void _vmap_set(VMap*m,const char*key,void*val){if(m->len>=m->cap){int64_t nc=m->cap*2;_VMapNode**nb=(_VMapNode**)calloc(nc,sizeof(_VMapNode*));for(int64_t i=0;i<m->cap;i++){_VMapNode*n=m->buckets[i];while(n){_VMapNode*nx=n->next;int64_t bi=(int64_t)(_vmhash(n->key)%(uint64_t)nc);n->next=nb[bi];nb[bi]=n;n=nx;}}free(m->buckets);m->buckets=nb;m->cap=nc;}int64_t bi=(int64_t)(_vmhash(key)%(uint64_t)m->cap);for(_VMapNode*n=m->buckets[bi];n;n=n->next){if(strcmp(n->key,key)==0){n->val=val;return;}}_VMapNode*n=(_VMapNode*)malloc(sizeof(_VMapNode));n->key=strdup(key);n->val=val;n->next=m->buckets[bi];m->buckets[bi]=n;m->len++;}"#);
+        self.line(r#"static void* _vmap_get(VMap*m,const char*key){if(!m->cap)return NULL;int64_t bi=(int64_t)(_vmhash(key)%(uint64_t)m->cap);for(_VMapNode*n=m->buckets[bi];n;n=n->next){if(strcmp(n->key,key)==0)return n->val;}return NULL;}"#);
+        self.line(r#"static bool _vmap_has(VMap*m,const char*key){if(!m->cap)return false;int64_t bi=(int64_t)(_vmhash(key)%(uint64_t)m->cap);for(_VMapNode*n=m->buckets[bi];n;n=n->next){if(strcmp(n->key,key)==0)return true;}return false;}"#);
+        self.line(r#"static void _vmap_del(VMap*m,const char*key){if(!m->cap)return;int64_t bi=(int64_t)(_vmhash(key)%(uint64_t)m->cap);_VMapNode**pp=&m->buckets[bi];while(*pp){if(strcmp((*pp)->key,key)==0){_VMapNode*d=*pp;*pp=d->next;free((void*)d->key);free(d);m->len--;return;}pp=&(*pp)->next;}}"#);
+        self.line(r#"static void _vmap_free(VMap*m){for(int64_t i=0;i<m->cap;i++){_VMapNode*n=m->buckets[i];while(n){_VMapNode*nx=n->next;free((void*)n->key);free(n);n=nx;}}free(m->buckets);m->buckets=NULL;m->cap=m->len=0;}"#);
+        self.line(r#"static int64_t map_len(VMap m){return m.len;}"#);
+        self.line(r#"static VArray map_keys(VMap m){VArray a=_arr_new(m.len>0?m.len:1);for(int64_t i=0;i<m.cap;i++){for(_VMapNode*n=m.buckets[i];n;n=n->next)_arr_push(&a,(void*)n->key);}return a;}"#);
+        self.line(r#"#define map_get_int(m,k) ((int64_t)(intptr_t)_vmap_get(&(m),(k)))"#);
+        self.line(r#"#define map_get_str(m,k) ((const char*)_vmap_get(&(m),(k)))"#);
+        self.line(r#"#define map_has(m,k)     _vmap_has(&(m),(k))"#);
+        self.line(r#"#define map_del(m,k)     _vmap_del(&(m),(k))"#);
+        self.line(r#"#define map_free(m)      _vmap_free(&(m))"#);
         // ── String utilities ─────────────────────────────────────────
         self.line(r#"static bool str_starts_with(const char*s,const char*p){return strncmp(s,p,strlen(p))==0;}"#);
         self.line(r#"static bool str_ends_with(const char*s,const char*x){int64_t sl=(int64_t)strlen(s),xl=(int64_t)strlen(x);return sl>=xl&&strcmp(s+sl-xl,x)==0;}"#);
@@ -438,6 +464,7 @@ impl Emitter {
             Some("bool")              => "bool".into(),
             Some("str")               => "const char*".into(),
             Some("ptr")               => "void*".into(),
+            Some("map")               => "VMap".into(),
             Some("Result")            => "VResult".into(),
             Some(fp) if fp.starts_with("fn(") => {
                 // Function pointer used in a generic type position (e.g. struct field)
@@ -493,6 +520,7 @@ impl Emitter {
                     Some("i32")               => "int32_t".into(),
                     Some("i64"|"int")         => "int64_t".into(),
                     Some(t) if t.starts_with('[') => "VArray".into(),
+                    Some("map")               => "VMap".into(),
                     Some(other) if self.struct_names.contains(other) => other.to_string(),
                     _                         => "int64_t".into(), // default numeric
                 }
@@ -1377,6 +1405,18 @@ impl Emitter {
                 if name == "free" && args.len() == 1 {
                     let p = self.emit_expr(&args[0]);
                     return format!("free({})", p);
+                }
+                // map_set(m, key, val) — pick cast based on val type
+                if name == "map_set" && args.len() == 3 {
+                    let m   = self.emit_expr(&args[0]);
+                    let k   = self.emit_expr(&args[1]);
+                    let v   = self.emit_expr(&args[2]);
+                    let vty = self.infer_type(&args[2]);
+                    return if vty == "const char*" {
+                        format!("_vmap_set(&({}), {}, (void*)({}))", m, k, v)
+                    } else {
+                        format!("_vmap_set(&({}), {}, (void*)(intptr_t)({}))", m, k, v)
+                    };
                 }
                 let mut a: Vec<String> = Vec::new();
                 for arg in args { a.push(self.emit_expr(arg)); }
