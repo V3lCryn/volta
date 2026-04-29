@@ -244,6 +244,13 @@ impl Checker {
         c.fn_types.insert("file_delete".into(),   VType::Bool);
         c.fn_types.insert("file_size".into(),     VType::Int);
         c.fn_types.insert("file_readline".into(), VType::Str);
+        // Memory management
+        c.fn_types.insert("alloc".into(),           VType::Ptr);
+        c.fn_types.insert("free".into(),            VType::Nil);
+        c.fn_types.insert("arena_new".into(),       VType::Struct("VArena".into()));
+        c.fn_types.insert("arena_alloc".into(),     VType::Ptr);
+        c.fn_types.insert("arena_reset".into(),     VType::Nil);
+        c.fn_types.insert("arena_free_all".into(),  VType::Nil);
         c
     }
 
@@ -757,6 +764,27 @@ impl Checker {
                 } else {
                     VType::Unknown
                 }
+            }
+
+            Expr::Closure { params, ret_ty, body } => {
+                self.push_scope();
+                let prev_ret = self.current_fn_ret.take();
+                self.current_fn_ret = ret_ty.as_deref().map(|t| self.resolve_type_str(t));
+                for p in params {
+                    let ty = p.ty.as_deref()
+                        .map(|t| self.resolve_type_str(t))
+                        .unwrap_or(VType::Unknown);
+                    self.define(&p.name, ty);
+                }
+                for s in body { self.check_stmt(s); }
+                self.current_fn_ret = prev_ret;
+                self.pop_scope();
+                // Return a fn ptr type describing this closure's signature
+                let ret = ret_ty.as_deref().unwrap_or("nil");
+                let param_types: Vec<String> = params.iter()
+                    .map(|p| p.ty.as_deref().unwrap_or("?").to_string())
+                    .collect();
+                VType::FnPtr(format!("fn({})->{}", param_types.join(","), ret))
             }
 
             _ => { VType::Unknown }

@@ -1,4 +1,4 @@
-// volta/src/main.rs — Volta compiler v0.4.0
+// volta/src/main.rs — Volta compiler v0.5.0
 
 mod error;
 mod lexer;
@@ -15,7 +15,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 
-const VERSION: &str = "0.4.0";
+const VERSION: &str = "0.5.0";
 
 fn main() {
     let args: Vec<String> = env::args().collect();

@@ -23,16 +23,18 @@ impl std::fmt::Display for EmitError {
 impl std::error::Error for EmitError {}
 
 pub struct Emitter {
-    out:           String,
-    indent:        usize,
-    fn_types:      HashMap<String, String>,
-    var_types:     HashMap<String, String>,
-    struct_defs:   HashMap<String, Vec<(String, String)>>,
-    struct_names:  HashSet<String>,
-    enum_defs:     HashMap<String, Vec<String>>,
-    aliases:       HashMap<String, String>, // type alias name → target type string
-    tmp_counter:   usize,
-    in_result_fn:  bool,
+    out:             String,
+    indent:          usize,
+    fn_types:        HashMap<String, String>,
+    var_types:       HashMap<String, String>,
+    struct_defs:     HashMap<String, Vec<(String, String)>>,
+    struct_names:    HashSet<String>,
+    enum_defs:       HashMap<String, Vec<String>>,
+    aliases:         HashMap<String, String>, // type alias name → target type string
+    tmp_counter:     usize,
+    in_result_fn:    bool,
+    closure_buf:     String,   // pending closure C functions (emitted before forward decls)
+    closure_counter: usize,    // sequential id for generated closures
 }
 
 impl Emitter {
@@ -45,6 +47,8 @@ impl Emitter {
             aliases: HashMap::new(),
             tmp_counter: 0,
             in_result_fn: false,
+            closure_buf: String::new(),
+            closure_counter: 0,
         }
     }
 
@@ -65,6 +69,17 @@ impl Emitter {
         self.emit_runtime();
 
         // First pass: collect all type info
+        // Register runtime struct types so resolve_ty recognises them
+        self.struct_names.insert("VArena".into());
+        self.struct_names.insert("VClosure".into());
+        // Register memory / arena builtins so infer_type works on their calls
+        self.fn_types.insert("alloc".into(),           "void*".into());
+        self.fn_types.insert("free".into(),            "void".into());
+        self.fn_types.insert("arena_new".into(),       "VArena".into());
+        self.fn_types.insert("arena_alloc".into(),     "void*".into());
+        self.fn_types.insert("arena_reset".into(),     "void".into());
+        self.fn_types.insert("arena_free_all".into(),  "void".into());
+
         for stmt in &prog.stmts {
             // Collect type aliases first so resolve_ty can use them
             if let Stmt::TypeAlias { name, target, .. } = stmt {
@@ -102,6 +117,17 @@ impl Emitter {
                 _ => {}
             }
         }
+
+        // ── Closure pre-scan: must happen BEFORE any emit_expr calls so that
+        // closure counter IDs assigned here match those used during emission.
+        self.closure_counter = 0;
+        self.prescan_for_closures(prog);
+        if !self.closure_buf.is_empty() {
+            let cbuf = std::mem::take(&mut self.closure_buf);
+            self.out.push_str(&cbuf);
+            self.line("");
+        }
+        self.closure_counter = 0; // reset — main passes will re-number in same order
 
         // Constants (static const)
         let mut had_const = false;
@@ -348,6 +374,14 @@ impl Emitter {
         self.line(r#"static void pg_free(void){if(_pg_res){PQclear(_pg_res);_pg_res=NULL;}}"#);
         self.line(r#"static bool pg_exec(const char* sql){if(!_pg_conn)return false;PGresult*r=PQexec(_pg_conn,sql);bool ok=PQresultStatus(r)==PGRES_COMMAND_OK||PQresultStatus(r)==PGRES_TUPLES_OK;PQclear(r);return ok;}"#);
         self.line(r#"static const char* pg_escape(const char* s){static char buf[8192];size_t err;PQescapeStringConn(_pg_conn,buf,s,strlen(s),NULL);(void)err;return buf;}"#);
+        // ── Arena allocator ──────────────────────────────────────────
+        self.line(r#"typedef struct{char*buf;int64_t cap;int64_t pos;}VArena;"#);
+        self.line(r#"static VArena arena_new(int64_t cap){VArena a;a.buf=(char*)malloc((size_t)cap);a.cap=cap;a.pos=0;return a;}"#);
+        self.line(r#"static void* arena_alloc(VArena*a,int64_t size){if(a->pos+size>a->cap)return NULL;void*p=a->buf+a->pos;a->pos+=size;return p;}"#);
+        self.line(r#"static void arena_reset(VArena*a){a->pos=0;}"#);
+        self.line(r#"static void arena_free_all(VArena*a){free(a->buf);a->buf=NULL;a->cap=0;a->pos=0;}"#);
+        // ── Closure fat pointer (capturing closures) ─────────────────
+        self.line(r#"typedef struct{void*env;void*fn;}VClosure;"#);
         // ── Result type ──────────────────────────────────────────────
         self.line(r#"typedef struct{bool ok;int64_t ival;const char* sval;double fval;const char* err;}VResult;"#);
         self.line(r#"static VResult _volt_ok_i(int64_t v){VResult r;r.ok=true;r.ival=v;r.sval=NULL;r.fval=0;r.err=NULL;return r;}"#);
@@ -476,6 +510,145 @@ impl Emitter {
             }
             _ => "int64_t".into(), // safe default for unknown
         }
+    }
+
+    // ── Closure pre-scan ──────────────────────────────────────────────────────
+
+    /// Walk the whole program looking for Expr::Closure nodes (depth-first,
+    /// same order as emit_expr), emit each one as a static C function into
+    /// self.closure_buf, and assign it a name _vclosure_N.
+    ///
+    /// IMPORTANT: must visit closures in the SAME ORDER as emit_program so
+    /// that the closure_counter IDs match up.
+    /// emit_program order: constants → fn bodies → top-level stmts (main).
+    fn prescan_for_closures(&mut self, prog: &Program) {
+        // 1. Constant initialisers (same order as emit_program's const loop)
+        for stmt in &prog.stmts {
+            if let Stmt::Const { value, .. } = stmt {
+                self.prescan_expr(value);
+            }
+        }
+        // 2. Function bodies
+        for stmt in &prog.stmts {
+            if let Stmt::FnDef(f) = stmt {
+                for s in &f.body { self.prescan_stmt(s); }
+            }
+        }
+        // 3. Top-level (main) stmts — everything that isn't a fn/type def
+        for stmt in &prog.stmts {
+            match stmt {
+                Stmt::FnDef(_) | Stmt::ExternBlock(_) | Stmt::DeviceBlock(_)
+                | Stmt::StructDef(_) | Stmt::PackedStructDef(_) | Stmt::EnumDef(_)
+                | Stmt::Const { .. } | Stmt::TypeAlias { .. } => {}
+                _ => self.prescan_stmt(stmt),
+            }
+        }
+    }
+
+    fn prescan_stmt(&mut self, stmt: &Stmt) {
+        match stmt {
+            Stmt::FnDef(f) => {
+                for s in &f.body { self.prescan_stmt(s); }
+            }
+            Stmt::Let { value, .. } => self.prescan_expr(value),
+            Stmt::Const { value, .. } => self.prescan_expr(value),
+            Stmt::Assign { value, .. } => self.prescan_expr(value),
+            Stmt::Return(Some(e)) => self.prescan_expr(e),
+            Stmt::ExprStmt(e) => self.prescan_expr(e),
+            Stmt::If { cond, then_body, else_ifs, else_body, .. } => {
+                self.prescan_expr(cond);
+                for s in then_body { self.prescan_stmt(s); }
+                for (ec, eb) in else_ifs { self.prescan_expr(ec); for s in eb { self.prescan_stmt(s); } }
+                if let Some(eb) = else_body { for s in eb { self.prescan_stmt(s); } }
+            }
+            Stmt::While { cond, body, .. } => {
+                self.prescan_expr(cond);
+                for s in body { self.prescan_stmt(s); }
+            }
+            Stmt::For { iter, body, .. } | Stmt::ForIndex { iter, body, .. } => {
+                self.prescan_expr(iter);
+                for s in body { self.prescan_stmt(s); }
+            }
+            Stmt::Match { expr, arms, .. } => {
+                self.prescan_expr(expr);
+                for arm in arms { for s in &arm.body { self.prescan_stmt(s); } }
+            }
+            _ => {}
+        }
+    }
+
+    fn prescan_expr(&mut self, expr: &Expr) {
+        match expr {
+            Expr::Closure { params, ret_ty, body } => {
+                self.closure_counter += 1;
+                let name = format!("_vclosure_{}", self.closure_counter);
+                // Emit this closure's C function into closure_buf
+                let p = params.clone();
+                let r = ret_ty.clone();
+                let b = body.clone();
+                self.emit_closure_to_buf(&p, r.as_deref(), &b, &name);
+                // Do NOT recurse into body — nested closures unsupported in v0.5
+            }
+            Expr::BinOp { left, right, .. } => {
+                self.prescan_expr(left); self.prescan_expr(right);
+            }
+            Expr::UnaryOp { expr, .. } => self.prescan_expr(expr),
+            Expr::Call { args, .. } => { for a in args { self.prescan_expr(a); } }
+            Expr::MethodCall { target, args, .. } => {
+                self.prescan_expr(target);
+                for a in args { self.prescan_expr(a); }
+            }
+            Expr::Field { target, .. } => self.prescan_expr(target),
+            Expr::Index { target, index } => {
+                self.prescan_expr(target); self.prescan_expr(index);
+            }
+            Expr::StructLit { fields, .. } => {
+                for (_, v) in fields { self.prescan_expr(v); }
+            }
+            Expr::Array(elems) => { for e in elems { self.prescan_expr(e); } }
+            Expr::Cast { expr, .. } => self.prescan_expr(expr),
+            Expr::Try(e) => self.prescan_expr(e),
+            Expr::Range { start, end, .. } => {
+                self.prescan_expr(start); self.prescan_expr(end);
+            }
+            _ => {}
+        }
+    }
+
+    /// Emit a closure as a static C function into self.closure_buf using the
+    /// buffer-swap trick (temporarily redirect self.out).
+    fn emit_closure_to_buf(&mut self, params: &[Param], ret_ty: Option<&str>, body: &[Stmt], name: &str) {
+        // Redirect output
+        let saved_out    = std::mem::take(&mut self.out);
+        let saved_indent = self.indent;
+        let saved_vtypes = self.var_types.clone();
+        let saved_result = self.in_result_fn;
+
+        // Register params so the body can look up their types
+        for p in params {
+            if let Some(ty) = &p.ty {
+                self.var_types.insert(p.name.clone(), ty.clone());
+            }
+        }
+        self.in_result_fn = ret_ty == Some("Result");
+
+        let ret        = self.resolve_ty(ret_ty);
+        let params_str = self.emit_params(params);
+        self.indent = 0;
+        self.line(&format!("static {} {}({}) {{", ret, name, params_str));
+        self.indent = 1;
+        for s in body { self.emit_stmt(s); }
+        self.indent = 0;
+        self.line("}");
+
+        // Harvest and restore
+        let closure_code = std::mem::take(&mut self.out);
+        self.out         = saved_out;
+        self.indent      = saved_indent;
+        self.var_types   = saved_vtypes;
+        self.in_result_fn = saved_result;
+        self.closure_buf.push_str(&closure_code);
+        self.closure_buf.push('\n');
     }
 
     // ── Struct ────────────────────────────────────────────────────────────────
@@ -614,6 +787,24 @@ impl Emitter {
                             // Register return type so calls through this var infer correctly
                             self.fn_types.insert(name.clone(), ret_c);
                             return;
+                        }
+                    }
+                }
+
+                // Special case: let p: *T = alloc(n) → (T*)calloc(n, sizeof(T))
+                if let Some(ty_str) = ty {
+                    if ty_str.starts_with('*') {
+                        if let Expr::Call { name: call_name, args } = value {
+                            if call_name == "alloc" && args.len() == 1 {
+                                let inner_ty = &ty_str[1..];
+                                let inner_c  = self.resolve_ty(Some(inner_ty));
+                                let c_ptr    = format!("{}*", inner_c);
+                                let n_expr   = self.emit_expr(&args[0]);
+                                self.iline(&format!("{} {} = ({})calloc({}, sizeof({}));",
+                                    c_ptr, name, c_ptr, n_expr, inner_c));
+                                self.var_types.insert(name.clone(), ty_str.clone());
+                                return;
+                            }
                         }
                     }
                 }
@@ -895,13 +1086,12 @@ impl Emitter {
         result
     }
 
-    fn emit_cond(&self, expr: &Expr) -> String {
+    fn emit_cond(&mut self, expr: &Expr) -> String {
         let s = self.emit_expr(expr);
-        // strip one layer of outer parens for cleaner C output
         if s.starts_with('(') && s.ends_with(')') { s[1..s.len()-1].to_string() } else { s }
     }
 
-    fn emit_expr(&self, expr: &Expr) -> String {
+    fn emit_expr(&mut self, expr: &Expr) -> String {
         match expr {
             Expr::Nil            => "NULL".into(),
             Expr::Bool(true)     => "true".into(),
@@ -942,9 +1132,11 @@ impl Emitter {
             Expr::Array(_) => "/* array */NULL".into(), // handled in emit_stmt
 
             Expr::StructLit { name, fields } => {
-                let fs: Vec<String> = fields.iter()
-                    .map(|(fn_, fv)| format!(".{} = {}", fn_, self.emit_expr(fv)))
-                    .collect();
+                let mut fs: Vec<String> = Vec::new();
+                for (fn_, fv) in fields {
+                    let v = self.emit_expr(fv);
+                    fs.push(format!(".{} = {}", fn_, v));
+                }
                 format!("({}){{ {} }}", name, fs.join(", "))
             }
 
@@ -1012,9 +1204,8 @@ impl Emitter {
                     if args.is_empty() {
                         return "print(\"\")".to_string();
                     }
-                    let parts: Vec<String> = args.iter()
-                        .map(|a| self.coerce_str(a))
-                        .collect();
+                    let mut parts: Vec<String> = Vec::new();
+                    for a in args { let s = self.coerce_str(a); parts.push(s); }
                     if parts.len() == 1 {
                         return format!("print({})", parts[0]);
                     }
@@ -1056,7 +1247,17 @@ impl Emitter {
                     let arr = self.emit_expr(&args[0]);
                     return format!("((int64_t)(intptr_t)_arr_pop(&{}))", arr);
                 }
-                let a: Vec<String> = args.iter().map(|a| self.emit_expr(a)).collect();
+                // Memory builtins
+                if name == "alloc" && args.len() == 1 {
+                    let n = self.emit_expr(&args[0]);
+                    return format!("malloc({})", n);
+                }
+                if name == "free" && args.len() == 1 {
+                    let p = self.emit_expr(&args[0]);
+                    return format!("free({})", p);
+                }
+                let mut a: Vec<String> = Vec::new();
+                for arg in args { a.push(self.emit_expr(arg)); }
                 format!("{}({})", Self::safe_name(name), a.join(", "))
             }
 
@@ -1088,7 +1289,8 @@ impl Emitter {
                     return format!("({}.err)", t);
                 }
                 let t = self.emit_expr(target);
-                let a: Vec<String> = args.iter().map(|a| self.emit_expr(a)).collect();
+                let mut a: Vec<String> = Vec::new();
+                for arg in args { a.push(self.emit_expr(arg)); }
                 format!("{}.{}({})", t, method, a.join(", "))
             }
 
@@ -1122,10 +1324,17 @@ impl Emitter {
                     _                             => format!("AGET_INT({}, {})", t, i),
                 }
             }
+
+            // Closure literal — pre-scan already emitted the C function;
+            // just return the name (counter increments in same DFS order).
+            Expr::Closure { .. } => {
+                self.closure_counter += 1;
+                format!("_vclosure_{}", self.closure_counter)
+            }
         }
     }
 
-    fn coerce_str(&self, expr: &Expr) -> String {
+    fn coerce_str(&mut self, expr: &Expr) -> String {
         match expr {
             Expr::StringLit(_)  => self.emit_expr(expr),
             Expr::Bool(_)       => format!("bool_to_str({})", self.emit_expr(expr)),

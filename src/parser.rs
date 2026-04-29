@@ -706,6 +706,31 @@ impl Parser {
                 self.expect(&TokenKind::RParen)?;
                 Ok(expr)
             }
+            // Closure literal: |x: i64, y| -> R do ... end   or   |x| expr
+            TokenKind::Pipe => {
+                self.advance(); // eat opening |
+                let mut params = Vec::new();
+                if !self.check(&TokenKind::Pipe) {
+                    loop {
+                        self.skip_newlines();
+                        let pname = self.expect_ident()?;
+                        let pty   = if self.eat(&TokenKind::Colon) { Some(self.parse_type()?) } else { None };
+                        params.push(Param { name: pname, ty: pty });
+                        if !self.eat(&TokenKind::Comma) { break; }
+                    }
+                }
+                self.expect(&TokenKind::Pipe)?; // closing |
+                let ret_ty = if self.eat(&TokenKind::Arrow) { Some(self.parse_type()?) } else { None };
+                let body = if self.eat(&TokenKind::Do) {
+                    let stmts = self.parse_block()?;
+                    self.expect(&TokenKind::End)?;
+                    stmts
+                } else {
+                    let expr = self.parse_expr()?;
+                    vec![Stmt::Return(Some(expr))]
+                };
+                Ok(Expr::Closure { params, ret_ty, body })
+            }
             other => Err(ParseError { msg: format!("unexpected token: {:?}", other), line: self.peek_line(), col: self.peek_col() }),
         }
     }

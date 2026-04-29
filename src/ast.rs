@@ -62,6 +62,13 @@ pub enum Expr {
 
     // expr? — propagate error early
     Try(Box<Expr>),
+
+    // |x: i64, y: i64| -> R do ... end   or   |x| expr
+    Closure {
+        params: Vec<Param>,
+        ret_ty: Option<String>,
+        body:   Vec<Stmt>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
