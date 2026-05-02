@@ -3,11 +3,15 @@
 -- Usage:  steg <file> [options]
 --   --info      File type, size, entropy (default)
 --   --header    Hex dump of first 64 bytes
---   --flags     Search for CTF flag patterns
+--   --flags     Search for CTF flag patterns (default)
 --   --strings   Extract printable strings
 --   --entropy   Per-block entropy heatmap
---   --carve     Scan for embedded file signatures
+--   --carve     Scan for embedded file signatures (default)
 --   --lsb       Extract LSB bit-stream (steg images)
+--   --xor       Brute-force all single-byte XOR keys
+--   --append    Detect data appended after JPEG/PNG EOF marker
+--   --chunks    JPEG marker / PNG chunk structure listing
+--   --freq      Byte frequency histogram (first 4096 bytes)
 --   --fix       Repair a corrupted image header
 --   --all       Run every analysis
 
@@ -360,6 +364,306 @@ fn cmd_lsb(buf: ptr, size: i64)
   print("    [*] Recovered " .. int_to_str(recovered) .. " bytes from LSBs")
 end
 
+-- ── --xor ─────────────────────────────────────────────────────────────────────
+
+-- Score a XOR key by counting printable bytes in the first 256 bytes
+fn xor_score(buf: ptr, size: i64, key: i64) -> i64
+  let limit = 256
+  if size < limit do limit = size end
+  let count: i64 = 0
+  for i in 0..limit do
+    let b = (bget(buf, i) ^ key) & 0xFF
+    if is_printable(b) do count += 1 end
+  end
+  return count
+end
+
+-- Scan XOR-decrypted content (first 4096 bytes) for flag patterns
+fn xor_find_flag(buf: ptr, size: i64, key: i64) -> str
+  let limit = 4096
+  if size < limit do limit = size end
+  let prefixes: [str] = ["FLAG{", "flag{", "CTF{", "picoCTF{", "HTB{", "THM{"]
+  for pi, prefix in prefixes do
+    let plen = str_len(prefix)
+    let i: i64 = 0
+    while i < limit do
+      let ok: bool = true
+      let j: i64 = 0
+      while j < plen do
+        if ((bget(buf, i + j) ^ key) & 0xFF) != char_at(prefix, j) do
+          ok = false
+        end
+        j += 1
+      end
+      if ok do
+        let result: str = prefix
+        let k = i + plen
+        while k < size and str_len(result) < 200 do
+          let b = (bget(buf, k) ^ key) & 0xFF
+          if b == 125 do
+            result = result .. "}"
+            return result
+          end
+          if not is_printable(b) do return result end
+          result = result .. char_from(b)
+          k += 1
+        end
+        return result
+      end
+      i += 1
+    end
+  end
+  return ""
+end
+
+fn cmd_xor(buf: ptr, size: i64)
+  print("\n[=] XOR BRUTE-FORCE  (all single-byte keys 0x01–0xFF)")
+  let best_key:   i64 = 0
+  let best_score: i64 = 0
+  let k: i64 = 1
+  while k < 256 do
+    let s = xor_score(buf, size, k)
+    if s > best_score do
+      best_score = s
+      best_key   = k
+    end
+    k += 1
+  end
+  print("    Best key : 0x" .. bhex(best_key) .. "  (" .. int_to_str(best_score) .. "/256 printable)")
+  -- Check for a decryptable flag with the best key
+  let flag = xor_find_flag(buf, size, best_key)
+  if not str_eq(flag, "") do
+    print("    [!] FLAG with key 0x" .. bhex(best_key) .. ": " .. flag)
+  end
+  -- Show decrypted preview (first 128 bytes, 64 per row)
+  print("    Decrypted preview (key 0x" .. bhex(best_key) .. "):")
+  let preview = 128
+  if size < preview do preview = size end
+  let line: str = "    "
+  let col:  i64 = 0
+  for i in 0..preview do
+    let b = (bget(buf, i) ^ best_key) & 0xFF
+    if is_printable(b) do
+      line = line .. char_from(b)
+    else
+      line = line .. "."
+    end
+    col += 1
+    if col == 64 do
+      print(line)
+      line = "    "
+      col  = 0
+    end
+  end
+  if col > 0 do print(line) end
+end
+
+-- ── --append ──────────────────────────────────────────────────────────────────
+
+fn cmd_append(buf: ptr, size: i64, ftype: str)
+  print("\n[=] APPENDED DATA DETECTION")
+
+  if not str_eq(ftype, "jpeg") and not str_eq(ftype, "png") do
+    print("    [*] Append detection supports JPEG and PNG only")
+    return
+  end
+
+  let data_start: i64 = 0
+  let found: bool = false
+
+  if str_eq(ftype, "jpeg") do
+    -- Find the last FF D9 (JPEG End of Image) marker
+    let i: i64 = 0
+    while i < size - 1 do
+      if bget(buf, i) == 0xFF and bget(buf, i + 1) == 0xD9 do
+        data_start = i + 2
+        found = true
+      end
+      i += 1
+    end
+    if not found do
+      print("    [-] JPEG EOI marker (FF D9) not found — file may be corrupt")
+      return
+    end
+    print("    JPEG EOI at +" .. int_to_str(data_start - 2) .. " (0x" .. off_str(data_start - 2) .. ")")
+  end
+
+  if str_eq(ftype, "png") do
+    -- Find the last IEND chunk type tag (49 45 4E 44)
+    let i: i64 = 8
+    while i < size - 4 do
+      if bget(buf, i)   == 0x49 and bget(buf, i+1) == 0x45 and
+         bget(buf, i+2) == 0x4E and bget(buf, i+3) == 0x44 do
+        data_start = i + 8    -- skip IEND tag(4) + CRC(4)
+        found = true
+      end
+      i += 1
+    end
+    if not found do
+      print("    [-] PNG IEND chunk not found — file may be corrupt")
+      return
+    end
+    print("    PNG IEND at +" .. int_to_str(data_start - 12) .. " (0x" .. off_str(data_start - 12) .. ")")
+  end
+
+  if data_start >= size do
+    print("    [-] No data appended after EOF marker")
+    return
+  end
+
+  let appended = size - data_start
+  print("    [!] " .. int_to_str(appended) .. " bytes of appended data at +" .. int_to_str(data_start))
+
+  -- Hex dump the first 64 bytes of appended data
+  let show = 64
+  if appended < show do show = appended end
+  let row: i64 = 0
+  while row < show do
+    let line: str = "      " .. off_str(data_start + row) .. "  "
+    let col: i64 = 0
+    while col < 16 and row + col < show do
+      line = line .. bhex(bget(buf, data_start + row + col)) .. " "
+      col += 1
+    end
+    print(line)
+    row += 16
+  end
+
+  -- Scan appended region for flag patterns
+  let i: i64 = data_start
+  while i < size do
+    let pfx: [str] = ["FLAG{", "flag{", "CTF{", "picoCTF{", "HTB{", "THM{"]
+    for pi, prefix in pfx do
+      if prefix_match(buf, size, i, prefix) do
+        print("    [!] FLAG in appended data: " .. extract_flag(buf, size, i, prefix))
+      end
+    end
+    i += 1
+  end
+end
+
+-- ── --chunks ──────────────────────────────────────────────────────────────────
+
+fn jpeg_marker_name(m: i64) -> str
+  if m == 0xD8 do return "SOI  Start of Image" end
+  if m == 0xD9 do return "EOI  End of Image" end
+  if m == 0xE0 do return "APP0 JFIF header" end
+  if m == 0xE1 do return "APP1 EXIF / XMP metadata" end
+  if m == 0xE2 do return "APP2 ICC color profile" end
+  if m == 0xDB do return "DQT  Quantization table" end
+  if m == 0xC0 do return "SOF0 Baseline DCT frame" end
+  if m == 0xC2 do return "SOF2 Progressive DCT frame" end
+  if m == 0xC4 do return "DHT  Huffman table" end
+  if m == 0xDA do return "SOS  Start of Scan (image data follows)" end
+  if m == 0xFE do return "COM  Comment" end
+  if m >= 0xE3 and m <= 0xEF do return "APPn Application-specific" end
+  if m >= 0xD0 and m <= 0xD7 do return "RST  Restart marker" end
+  return "unknown"
+end
+
+fn cmd_chunks(buf: ptr, size: i64, ftype: str)
+  print("\n[=] STRUCTURE / CHUNK ANALYSIS")
+
+  if str_eq(ftype, "jpeg") do
+    print("    JPEG segments (FF xx scan):")
+    print("    offset    marker  length  description")
+    let i: i64 = 0
+    while i < size - 1 do
+      if bget(buf, i) == 0xFF do
+        let marker = bget(buf, i + 1)
+        if marker != 0x00 and marker != 0xFF do
+          let mname = jpeg_marker_name(marker)
+          -- Segments with explicit length fields
+          let has_len: bool = marker != 0xD8 and marker != 0xD9 and
+                              marker != 0x01 and
+                              not (marker >= 0xD0 and marker <= 0xD7)
+          if has_len and i + 3 < size do
+            let seg_len = (bget(buf, i + 2) << 8) + bget(buf, i + 3)
+            print("    +" .. int_to_str(i) .. "\tFF " .. bhex(marker) .. "  len=" .. int_to_str(seg_len) .. "\t" .. mname)
+          else
+            print("    +" .. int_to_str(i) .. "\tFF " .. bhex(marker) .. "            \t" .. mname)
+          end
+        end
+      end
+      i += 1
+    end
+    return
+  end
+
+  if str_eq(ftype, "png") do
+    print("    PNG chunks:")
+    print("    offset    type  length  note")
+    let known: [str] = ["IHDR", "IDAT", "IEND", "PLTE", "tEXt",
+                        "zTXt", "iTXt", "gAMA", "sRGB", "bKGD",
+                        "tIME", "pHYs", "sBIT", "hIST", "tRNS"]
+    let i: i64 = 8   -- skip 8-byte PNG signature
+    while i + 12 <= size do
+      let clen = (bget(buf, i)   << 24) + (bget(buf, i+1) << 16) +
+                 (bget(buf, i+2) <<  8) +  bget(buf, i+3)
+      if clen < 0 or clen > size do
+        print("    [!] Bad chunk length at +" .. int_to_str(i) .. " — stopping")
+        i = size
+      else
+        let c0 = char_from(bget(buf, i+4))
+        let c1 = char_from(bget(buf, i+5))
+        let c2 = char_from(bget(buf, i+6))
+        let c3 = char_from(bget(buf, i+7))
+        let ctype = c0 .. c1 .. c2 .. c3
+        let is_known: bool = false
+        for ki, kt in known do
+          if str_eq(ctype, kt) do is_known = true end
+        end
+        let note: str = ""
+        if not is_known do note = "  << NON-STANDARD (possible hidden data!)" end
+        print("    +" .. int_to_str(i) .. "\t" .. ctype .. "\tlen=" .. int_to_str(clen) .. note)
+        i = i + 12 + clen
+      end
+    end
+    return
+  end
+
+  print("    [*] Chunk analysis supports JPEG and PNG only")
+end
+
+-- ── --freq ────────────────────────────────────────────────────────────────────
+
+fn cmd_freq(buf: ptr, size: i64)
+  print("\n[=] BYTE FREQUENCY  (first 4096 bytes, non-zero entries)")
+  print("    byte  count   pct  histogram")
+  let sample = size
+  if sample > 4096 do sample = 4096 end
+  -- Build frequency table via hash map
+  let freq: map = map_new()
+  for i in 0..sample do
+    let b   = bget(buf, i)
+    let key = bhex(b)
+    if map_has(freq, key) do
+      map_set(freq, key, map_get_int(freq, key) + 1)
+    else
+      map_set(freq, key, 1)
+    end
+  end
+  -- Print in byte-value order 0x00 – 0xFF
+  let i: i64 = 0
+  while i < 256 do
+    let key = bhex(i)
+    if map_has(freq, key) do
+      let count = map_get_int(freq, key)
+      let pct   = (count * 100) / sample
+      let bar_n = pct / 2
+      let bar:  str = ""
+      let k: i64 = 0
+      while k < bar_n do
+        bar = bar .. "#"
+        k += 1
+      end
+      print("    " .. key .. "    " .. int_to_str(count) .. "\t" .. int_to_str(pct) .. "%\t" .. bar)
+    end
+    i += 1
+  end
+  map_free(freq)
+end
+
 -- ── --fix ─────────────────────────────────────────────────────────────────────
 
 -- Heuristic: look for JPEG markers deeper in the file
@@ -445,15 +749,19 @@ fn run()
     print("")
     print("  Usage:  steg <file> [options]")
     print("")
-    print("  --info      File type, size, entropy summary  (default)")
+    print("  --info      File type, size, hash, entropy summary  (default)")
     print("  --header    Hex dump of first 64 bytes")
-    print("  --flags     Search for CTF flag patterns")
+    print("  --flags     Search for CTF flag patterns             (default)")
     print("  --strings   Extract printable strings (>= 6 chars)")
-    print("  --entropy   Per-block entropy heatmap")
-    print("  --carve     Scan for embedded file signatures")
+    print("  --entropy   Per-block Shannon entropy heatmap")
+    print("  --carve     Scan for embedded file signatures        (default)")
     print("  --lsb       Extract LSB bit-stream (image steg)")
+    print("  --xor       Brute-force all 255 single-byte XOR keys")
+    print("  --append    Detect data appended after JPEG/PNG EOF marker")
+    print("  --chunks    JPEG segment / PNG chunk structure listing")
+    print("  --freq      Byte frequency histogram (first 4096 bytes)")
     print("  --fix       Attempt to repair corrupted image header")
-    print("  --all       Run every analysis")
+    print("  --all       Run every analysis module")
     return
   end
 
@@ -484,7 +792,7 @@ fn run()
   let run_all = map_has(opts, "--all")
   let any_opt = map_len(opts) > 0
 
-  -- Resolve which modules to run
+  -- Resolve which modules to run (info, flags, carve are on by default)
   let do_info    = run_all or map_has(opts, "--info")    or not any_opt
   let do_header  = run_all or map_has(opts, "--header")
   let do_flags   = run_all or map_has(opts, "--flags")   or not any_opt
@@ -492,9 +800,13 @@ fn run()
   let do_entropy = run_all or map_has(opts, "--entropy")
   let do_carve   = run_all or map_has(opts, "--carve")   or not any_opt
   let do_lsb     = run_all or map_has(opts, "--lsb")
+  let do_xor     = run_all or map_has(opts, "--xor")
+  let do_append  = run_all or map_has(opts, "--append")
+  let do_chunks  = run_all or map_has(opts, "--chunks")
+  let do_freq    = run_all or map_has(opts, "--freq")
   let do_fix     =            map_has(opts, "--fix")     -- never runs by default
 
-  -- Run selected modules
+  -- Dispatch
   if do_info    do cmd_info(buf, size, path, ftype) end
   if do_header  do cmd_header(buf, size) end
   if do_flags   do cmd_flags(buf, size) end
@@ -502,6 +814,10 @@ fn run()
   if do_entropy do cmd_entropy(buf, size) end
   if do_carve   do cmd_carve(buf, size) end
   if do_lsb     do cmd_lsb(buf, size) end
+  if do_xor     do cmd_xor(buf, size) end
+  if do_append  do cmd_append(buf, size, ftype) end
+  if do_chunks  do cmd_chunks(buf, size, ftype) end
+  if do_freq    do cmd_freq(buf, size) end
   if do_fix     do cmd_fix(buf, size, ftype, path) end
 
   map_free(opts)
