@@ -81,6 +81,23 @@ impl Emitter {
         self.struct_names.insert("VArena".into());
         self.struct_names.insert("VClosure".into());
         self.struct_names.insert("VMap".into());
+        self.struct_names.insert("VRing".into());
+        // Bionic builtins
+        self.fn_types.insert("ticks".into(),       "int64_t".into());
+        self.fn_types.insert("sleep_us".into(),     "void".into());
+        self.fn_types.insert("ema".into(),          "double".into());
+        self.fn_types.insert("clamp_i".into(),      "int64_t".into());
+        self.fn_types.insert("clamp_f".into(),      "double".into());
+        self.fn_types.insert("map_range".into(),    "double".into());
+        self.fn_types.insert("median3".into(),      "int64_t".into());
+        self.fn_types.insert("rms_buf".into(),      "double".into());
+        self.fn_types.insert("lpf_alpha".into(),    "double".into());
+        self.fn_types.insert("ring_new".into(),     "VRing".into());
+        self.fn_types.insert("ring_pop".into(),     "int64_t".into());
+        self.fn_types.insert("ring_peek".into(),    "int64_t".into());
+        self.fn_types.insert("ring_len".into(),     "int64_t".into());
+        self.fn_types.insert("ring_full".into(),    "bool".into());
+        self.fn_types.insert("ring_empty".into(),   "bool".into());
         // Register memory / arena builtins so infer_type works on their calls
         self.fn_types.insert("alloc".into(),           "void*".into());
         self.fn_types.insert("free".into(),            "void".into());
@@ -436,6 +453,51 @@ impl Emitter {
         self.line(r#"static VResult _volt_ok_s(const char* v){VResult r;r.ok=true;r.ival=0;r.sval=v;r.fval=0;r.err=NULL;return r;}"#);
         self.line(r#"static VResult _volt_ok_f(double v){VResult r;r.ok=true;r.ival=0;r.sval=NULL;r.fval=v;r.err=NULL;return r;}"#);
         self.line(r#"static VResult _volt_err(const char* e){VResult r;r.ok=false;r.ival=0;r.sval=NULL;r.fval=0;r.err=e;return r;}"#);
+        // ── str utilities missing from earlier runtime ────────────────────
+        self.line(r#"static const char* str_upper(const char*s){int64_t l=(int64_t)strlen(s);char*d=_vbuf+_vpos;for(int64_t i=0;i<l;i++)d[i]=(char)toupper((unsigned char)s[i]);d[l]='\0';_vpos=(_vpos+l+1)%131072;return d;}"#);
+        self.line(r#"static const char* str_lower(const char*s){int64_t l=(int64_t)strlen(s);char*d=_vbuf+_vpos;for(int64_t i=0;i<l;i++)d[i]=(char)tolower((unsigned char)s[i]);d[l]='\0';_vpos=(_vpos+l+1)%131072;return d;}"#);
+        self.line(r#"static const char* str_repeat(const char*s,int64_t n){int64_t sl=(int64_t)strlen(s),tot=sl*n;char*d=_vbuf+_vpos;for(int64_t i=0;i<n&&tot<65000;i++)memcpy(d+i*sl,s,sl);d[tot]='\0';_vpos=(_vpos+tot+1)%131072;return d;}"#);
+        // ── Bionic / real-time stdlib ─────────────────────────────────────────
+        // Precision timing
+        self.line(r#"static int64_t ticks(void){struct timespec _ts;clock_gettime(CLOCK_MONOTONIC,&_ts);return (int64_t)_ts.tv_sec*1000000000LL+(int64_t)_ts.tv_nsec;}"#);
+        self.line(r#"static void sleep_us(int64_t us){struct timespec _t;_t.tv_sec=us/1000000LL;_t.tv_nsec=(us%1000000LL)*1000LL;nanosleep(&_t,NULL);}"#);
+        // Signal processing
+        self.line(r#"static double ema(double prev,double sample,double alpha){return alpha*sample+(1.0-alpha)*prev;}"#);
+        self.line(r#"static int64_t clamp_i(int64_t v,int64_t lo,int64_t hi){return v<lo?lo:v>hi?hi:v;}"#);
+        self.line(r#"static double clamp_f(double v,double lo,double hi){return v<lo?lo:v>hi?hi:v;}"#);
+        self.line(r#"static double map_range(double v,double in_lo,double in_hi,double out_lo,double out_hi){if(in_hi==in_lo)return out_lo;return (v-in_lo)/(in_hi-in_lo)*(out_hi-out_lo)+out_lo;}"#);
+        self.line(r#"static int64_t median3(int64_t a,int64_t b,int64_t c){int64_t t;if(a>b){t=a;a=b;b=t;}if(b>c){t=b;b=c;c=t;}if(a>b){t=a;a=b;b=t;}return b;}"#);
+        self.line(r#"static double rms_buf(const void*buf,int64_t len){if(len<=0)return 0.0;const int16_t*s=(const int16_t*)buf;double sum=0.0;for(int64_t i=0;i<len;i++){double v=(double)s[i];sum+=v*v;}return sqrt(sum/(double)len);}"#);
+        self.line(r#"static double lpf_alpha(double cutoff_hz,double sample_rate_hz){double rc=1.0/(6.28318530717958647692*cutoff_hz);double dt=1.0/sample_rate_hz;return dt/(rc+dt);}"#);
+        // Ring buffer — power-of-two capacity, integer samples, overwrites oldest on overflow
+        self.line(r#"typedef struct{int64_t*data;int64_t cap;int64_t head;int64_t tail;int64_t len;}VRing;"#);
+        self.line(r#"static VRing ring_new(int64_t cap){VRing r;r.data=(int64_t*)malloc((size_t)cap*sizeof(int64_t));r.cap=cap;r.head=0;r.tail=0;r.len=0;return r;}"#);
+        self.line(r#"static void _ring_push(VRing*r,int64_t v){r->data[r->head]=v;r->head=(r->head+1)%r->cap;if(r->len<r->cap)r->len++;else r->tail=(r->tail+1)%r->cap;}"#);
+        self.line(r#"static int64_t _ring_pop(VRing*r){if(!r->len)return 0;int64_t v=r->data[r->tail];r->tail=(r->tail+1)%r->cap;r->len--;return v;}"#);
+        self.line(r#"static int64_t _ring_peek(VRing*r,int64_t i){if(i<0||i>=r->len)return 0;return r->data[(r->tail+i)%r->cap];}"#);
+        self.line(r#"static int64_t ring_len(VRing r){return r.len;}"#);
+        self.line(r#"static bool ring_full(VRing r){return r.len>=r.cap;}"#);
+        self.line(r#"static bool ring_empty(VRing r){return r.len==0;}"#);
+        self.line(r#"static void _ring_free(VRing*r){free(r->data);r->data=NULL;r->cap=r->len=0;}"#);
+        self.line(r#"#define ring_push(r,v)  _ring_push(&(r),(v))"#);
+        self.line(r#"#define ring_pop(r)     _ring_pop(&(r))"#);
+        self.line(r#"#define ring_peek(r,i)  _ring_peek(&(r),(i))"#);
+        self.line(r#"#define ring_free(r)    _ring_free(&(r))"#);
+        // @critical IRQ disable/enable — platform-adaptive macros
+        self.line(r#"#if defined(__arm__) || defined(__aarch64__)"#);
+        self.line(r#"  #define _VOLT_DISABLE_IRQ() __asm volatile("cpsid i" ::: "memory")"#);
+        self.line(r#"  #define _VOLT_ENABLE_IRQ()  __asm volatile("cpsie i" ::: "memory")"#);
+        self.line(r#"#elif defined(__AVR__)"#);
+        self.line(r#"  #include <avr/interrupt.h>"#);
+        self.line(r#"  #define _VOLT_DISABLE_IRQ() cli()"#);
+        self.line(r#"  #define _VOLT_ENABLE_IRQ()  sei()"#);
+        self.line(r#"#elif defined(__riscv)"#);
+        self.line(r#"  #define _VOLT_DISABLE_IRQ() __asm volatile("csrci mstatus, 8" ::: "memory")"#);
+        self.line(r#"  #define _VOLT_ENABLE_IRQ()  __asm volatile("csrsi mstatus, 8" ::: "memory")"#);
+        self.line(r#"#else"#);
+        self.line(r#"  #define _VOLT_DISABLE_IRQ() ((void)0)"#);
+        self.line(r#"  #define _VOLT_ENABLE_IRQ()  ((void)0)"#);
+        self.line(r#"#endif"#);
         self.line("// ───────────────────────────────────────────────────────────");
         self.line("");
     }
@@ -606,6 +668,9 @@ impl Emitter {
             Stmt::Return(Some(e)) => self.prescan_expr(e),
             Stmt::ExprStmt(e) => self.prescan_expr(e),
             Stmt::Defer { expr, .. } => self.prescan_expr(expr),
+            Stmt::Critical { body, .. } => {
+                for s in body { self.prescan_stmt(s); }
+            }
             Stmt::If { cond, then_body, else_ifs, else_body, .. } => {
                 self.prescan_expr(cond);
                 for s in then_body { self.prescan_stmt(s); }
@@ -775,10 +840,25 @@ impl Emitter {
     // ── Function ──────────────────────────────────────────────────────────────
 
     fn emit_fn_def(&mut self, f: &FnDef) {
+        // Emit GCC/Clang function attributes collected from @-annotations
+        let attr_str = if f.attrs.is_empty() {
+            String::new()
+        } else {
+            // Map Volta attribute names → GCC attribute strings
+            let gcc: Vec<&str> = f.attrs.iter().map(|a| match a.as_str() {
+                "interrupt" => "interrupt",
+                "noreturn"  => "noreturn",
+                "weak"      => "weak",
+                "naked"     => "naked",
+                "used"      => "used",
+                other       => other,
+            }).collect();
+            format!("__attribute__(({})) ", gcc.join(", "))
+        };
         let ret    = self.resolve_ty(f.ret_ty.as_deref());
         let params = self.emit_params(&f.params);
         let safe   = Self::safe_name(&f.name);
-        self.line(&format!("{} {}({}) {{", ret, safe, params));
+        self.line(&format!("{}{} {}({}) {{", attr_str, ret, safe, params));
         self.indent += 1;
         let prev_result_fn = self.in_result_fn;
         self.in_result_fn  = f.ret_ty.as_deref() == Some("Result");
@@ -1030,6 +1110,16 @@ impl Emitter {
             // Defer expressions are collected by emit_body_with_defers; nothing
             // to emit at the point where 'defer' appears in the source.
             Stmt::Defer { .. } => {}
+
+            // @critical do ... end — disable/restore hardware interrupts
+            Stmt::Critical { body, .. } => {
+                self.iline("{ _VOLT_DISABLE_IRQ();");
+                self.indent += 1;
+                for s in body { self.emit_stmt(s); }
+                self.indent -= 1;
+                self.iline("_VOLT_ENABLE_IRQ(); }");
+            }
+
             Stmt::Break              => self.iline("break;"),
             Stmt::Continue           => self.iline("continue;"),
 

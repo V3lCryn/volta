@@ -160,6 +160,13 @@ pub enum Stmt {
         line: usize,
     },
 
+    // @critical do ... end — disable hardware interrupts for the duration of the block.
+    // Emits platform-appropriate IRQ disable/enable intrinsics around the body.
+    Critical {
+        body: Vec<Stmt>,
+        line: usize,
+    },
+
     ExprStmt(Expr),
     FnDef(FnDef),
     StructDef(StructDef),
@@ -189,6 +196,10 @@ pub struct FnDef {
     pub ret_ty:  Option<String>,
     pub body:    Vec<Stmt>,
     pub is_pub:  bool,
+    /// GCC / Clang function attributes collected from @-annotations before `fn`.
+    /// e.g. `@interrupt fn isr()` → attrs = ["interrupt"]
+    /// e.g. `@noreturn fn fault()` → attrs = ["noreturn"]
+    pub attrs:   Vec<String>,
     pub line:    usize,
 }
 

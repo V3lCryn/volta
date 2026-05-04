@@ -314,6 +314,10 @@ impl Parser {
     }
 
     fn parse_fn_def(&mut self, is_pub: bool) -> PR<Stmt> {
+        self.parse_fn_def_with_attrs(is_pub, vec![])
+    }
+
+    fn parse_fn_def_with_attrs(&mut self, is_pub: bool, attrs: Vec<String>) -> PR<Stmt> {
         let line = self.peek_line();
         self.expect(&TokenKind::Fn)?;
         let name = self.expect_ident()?;
@@ -324,7 +328,7 @@ impl Parser {
         self.eat(&TokenKind::Do);
         let body = self.parse_block()?;
         self.expect(&TokenKind::End)?;
-        Ok(Stmt::FnDef(FnDef { name, params, ret_ty, body, is_pub, line }))
+        Ok(Stmt::FnDef(FnDef { name, params, ret_ty, body, is_pub, attrs, line }))
     }
 
     fn parse_struct_def(&mut self) -> PR<Stmt> {
@@ -486,14 +490,53 @@ impl Parser {
     }
 
     fn parse_at_block(&mut self) -> PR<Stmt> {
-        self.advance();
+        self.advance(); // consume @
         self.skip_newlines();
         match self.peek().clone() {
             TokenKind::Extern => { self.advance(); self.parse_extern_block() }
             TokenKind::Device => { self.advance(); self.parse_device_block() }
             TokenKind::Ident(ref s) if s == "extern" => { self.advance(); self.parse_extern_block() }
             TokenKind::Ident(ref s) if s == "device" => { self.advance(); self.parse_device_block() }
-            other => Err(ParseError { msg: format!("unknown @ block: {:?}", other), line: self.peek_line(), col: self.peek_col() }),
+
+            // @critical do ... end — interrupt-safe critical section
+            TokenKind::Ident(ref s) if s == "critical" => {
+                let line = self.peek_line();
+                self.advance();
+                self.expect(&TokenKind::Do)?;
+                let body = self.parse_block()?;
+                self.expect(&TokenKind::End)?;
+                Ok(Stmt::Critical { body, line })
+            }
+
+            // @interrupt fn, @noreturn fn, @weak fn, @inline fn — GCC function attributes
+            TokenKind::Ident(ref s)
+                if matches!(s.as_str(), "interrupt"|"noreturn"|"weak"|"naked"|"used"|"section") =>
+            {
+                // Collect one or more stacked attributes: @interrupt @noreturn fn …
+                let mut attrs: Vec<String> = vec![s.clone()];
+                self.advance();
+                loop {
+                    self.skip_newlines();
+                    if *self.peek() != TokenKind::At { break; }
+                    self.advance(); // consume @
+                    self.skip_newlines();
+                    if let TokenKind::Ident(a) = self.peek().clone() {
+                        attrs.push(a);
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+                self.skip_newlines();
+                let is_pub = self.eat(&TokenKind::Pub);
+                self.parse_fn_def_with_attrs(is_pub, attrs)
+            }
+
+            other => Err(ParseError {
+                msg: format!("unknown @ annotation: {:?}", other),
+                line: self.peek_line(),
+                col:  self.peek_col(),
+            }),
         }
     }
 

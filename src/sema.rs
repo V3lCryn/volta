@@ -265,6 +265,27 @@ impl Checker {
         c.fn_types.insert("arena_alloc".into(),     VType::Ptr);
         c.fn_types.insert("arena_reset".into(),     VType::Nil);
         c.fn_types.insert("arena_free_all".into(),  VType::Nil);
+        // ── Bionic / real-time builtins ──────────────────────────────────────────
+        // Timing
+        c.fn_types.insert("ticks".into(),           VType::Int);
+        c.fn_types.insert("sleep_us".into(),        VType::Nil);
+        // Signal processing
+        c.fn_types.insert("ema".into(),             VType::Float);
+        c.fn_types.insert("clamp_i".into(),         VType::Int);
+        c.fn_types.insert("clamp_f".into(),         VType::Float);
+        c.fn_types.insert("map_range".into(),       VType::Float);
+        c.fn_types.insert("median3".into(),         VType::Int);
+        c.fn_types.insert("rms_buf".into(),         VType::Float);
+        c.fn_types.insert("lpf_alpha".into(),       VType::Float);
+        // Ring buffer
+        c.fn_types.insert("ring_new".into(),        VType::Struct("VRing".into()));
+        c.fn_types.insert("ring_push".into(),       VType::Nil);
+        c.fn_types.insert("ring_pop".into(),        VType::Int);
+        c.fn_types.insert("ring_peek".into(),       VType::Int);
+        c.fn_types.insert("ring_len".into(),        VType::Int);
+        c.fn_types.insert("ring_full".into(),       VType::Bool);
+        c.fn_types.insert("ring_empty".into(),      VType::Bool);
+        c.fn_types.insert("ring_free".into(),       VType::Nil);
         c
     }
 
@@ -519,6 +540,12 @@ impl Checker {
                         "use explicit cleanup at the end of the loop body instead",
                     ));
                 }
+            }
+            Stmt::Critical { body, line } => {
+                self.current_line = *line;
+                self.push_scope();
+                for s in body { self.check_stmt(s); }
+                self.pop_scope();
             }
             Stmt::ExprStmt(e) => { self.check_expr(e); }
             Stmt::Return(Some(e)) => {

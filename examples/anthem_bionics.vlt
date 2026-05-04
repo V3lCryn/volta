@@ -1,0 +1,319 @@
+-- anthem_bionics.vlt — Demonstration of Volta's bionic hardware features
+--
+-- Simulates the signal processing pipeline for a prosthetic limb controller:
+--   • EMG (electromyography) sensor sampling via ring buffer
+--   • Real-time EMA filter → intent classification → servo mapping
+--   • Entropy-based artifact rejection (sudden noise bursts)
+--   • Cardiac monitor: R-peak detection from simulated ADC stream
+--   • @critical block for atomic sensor reads
+--   • @interrupt fn stub for ADC ISR pattern
+--   • Precision timing with ticks() for loop-rate enforcement
+--
+-- This is a simulation — I/O uses print() instead of hardware registers.
+-- In a real Anthem build, replace the ADC reads with @device register access.
+
+-- ── Hardware register map (ARM Cortex-M4 style) ───────────────────────────────
+-- On real hardware, uncomment:
+--   @device "adc1" at 0x40012000 do
+--     reg CR1:  u32
+--     reg CR2:  u32
+--     reg DR:   u32   -- data register (12-bit sample in bits [11:0])
+--   end
+--   ADC1_CR2 = 0x00000001   -- ADON
+--   let raw = (ADC1_DR & 0xFFF) as i64
+
+-- ── Simulated sensor parameters ──────────────────────────────────────────────
+
+const EMG_SAMPLE_RATE: i64  = 1000    -- Hz
+const EMG_BUF_SIZE:    i64  = 256     -- must be power of 2 for ring
+const EMG_THRESHOLD:   i64  = 512     -- raw ADC units above baseline
+const ECG_SAMPLE_RATE: i64  = 500
+const ECG_BUF_SIZE:    i64  = 128
+
+-- ── Packed struct: status flags sent to controller MCU ───────────────────────
+
+packed struct ProthFlags: u8
+  grip_intent: 1      -- user wants to close hand
+  extend_intent: 1    -- user wants to open hand
+  artifact: 1         -- signal quality too low
+  cardiac_alarm: 1    -- heart rate outside normal range
+  reserved: 4
+end
+
+-- ── EMG pipeline ──────────────────────────────────────────────────────────────
+
+-- Classify EMG intent from a ring of recent samples.
+-- Returns a score 0-100 (higher = stronger contraction signal).
+fn emg_classify(ring: VRing, baseline: i64) -> i64
+  if ring_empty(ring) do return 0 end
+  let sum:  i64 = 0
+  let count = ring_len(ring)
+  let i: i64 = 0
+  while i < count do
+    let sample = ring_peek(ring, i)
+    let diff   = sample - baseline
+    if diff < 0 do diff = 0 - diff end   -- abs
+    sum += diff
+    i += 1
+  end
+  let mean = sum / count
+  -- Map mean deviation to 0-100 score
+  return clamp_i(map_range(mean as f64, 0.0, 800.0, 0.0, 100.0) as i64, 0, 100)
+end
+
+-- Detect artifacts: if entropy of raw samples is very high, ADC noise burst
+fn emg_artifact(ring: VRing) -> bool
+  if ring_len(ring) < 16 do return false end
+  -- Build a tiny string-slice of recent samples to feed entropy()
+  -- (entropy works on byte distributions — we use 8-bit slices of sample)
+  let acc: str = ""
+  let i: i64 = 0
+  while i < 16 do
+    let b = ring_peek(ring, i) & 0xFF
+    acc = acc .. char_from(b)
+    i += 1
+  end
+  let e = entropy(acc)
+  return e > 7.2    -- near-maximum entropy → white noise → artifact
+end
+
+fn run_emg_pipeline() -> i64
+  print("[EMG] Initialising ring buffer (" .. int_to_str(EMG_BUF_SIZE) .. " samples)")
+  let ring: VRing = ring_new(EMG_BUF_SIZE)
+
+  -- Simulate 2 seconds of sensor data at EMG_SAMPLE_RATE
+  let baseline:  i64 = 2048    -- ADC midpoint (12-bit, 3.3V ref, ~1.65V)
+  let ema_val:   f64 = 0.0
+  let alpha:     f64 = 0.05    -- slow filter: ~20-sample time constant
+  let score:     i64 = 0
+  let samples = EMG_SAMPLE_RATE * 2
+  let t: i64 = 0
+  while t < samples do
+    -- Simulate a sensor read (contraction burst between t=600 and t=1200)
+    let raw: i64 = baseline
+    if t >= 600 and t < 1200 do
+      -- Gaussian-ish envelope approximation using triangle wave
+      let phase = t - 600
+      if phase < 300 do
+        raw = baseline + (phase * 2)
+      else
+        raw = baseline + (600 - (phase - 300)) * 2
+      end
+    end
+
+    -- @critical block: in a real ISR context this protects the ring write
+    @critical do
+      ring_push(ring, raw)
+    end
+
+    -- EMA low-pass filter on raw sample (cast to float)
+    ema_val = ema(ema_val, (raw - baseline) as f64, alpha)
+
+    -- Every 50ms (every 50 samples at 1kHz) run the classifier
+    if t % 50 == 0 do
+      let artifact = emg_artifact(ring)
+      if artifact do
+        print("[EMG] t=" .. int_to_str(t) .. "ms  ARTIFACT — discarding window")
+      else
+        score = emg_classify(ring, baseline)
+        let ema_str = float_to_str(ema_val)
+        print("[EMG] t=" .. int_to_str(t) .. "ms  score=" .. int_to_str(score) .. "  ema=" .. ema_str)
+      end
+    end
+    t += 1
+  end
+
+  ring_free(ring)
+  return score
+end
+
+-- ── Servo / motor control ──────────────────────────────────────────────────────
+
+-- Map EMG score (0-100) to servo PWM pulse width (1000-2000 µs, 1500 µs = neutral)
+fn score_to_pwm(score: i64, grip: bool) -> i64
+  if grip do
+    -- Closing: drive from 1500µs (neutral) to 2000µs (full close)
+    return clamp_i(map_range(score as f64, 0.0, 100.0, 1500.0, 2000.0) as i64, 1500, 2000)
+  else
+    -- Extending: drive from 1500µs (neutral) to 1000µs (full open)
+    return clamp_i(map_range(score as f64, 0.0, 100.0, 1500.0, 1000.0) as i64, 1000, 1500)
+  end
+end
+
+fn run_servo_demo(score: i64)
+  print("\n[SERVO] Mapping EMG score to prosthetic hand position:")
+  let i: i64 = 0
+  while i <= 100 do
+    let pw_close  = score_to_pwm(i, true)
+    let pw_extend = score_to_pwm(i, false)
+    if i % 20 == 0 do
+      print("  score=" .. int_to_str(i) ..
+            "  grip_pw=" .. int_to_str(pw_close) .. "µs" ..
+            "  extend_pw=" .. int_to_str(pw_extend) .. "µs")
+    end
+    i += 1
+  end
+end
+
+-- ── Cardiac monitor ───────────────────────────────────────────────────────────
+
+-- Simple R-peak detector using derivative threshold.
+-- Returns detected heart rate in BPM (0 if not enough data yet).
+fn ecg_detect_rate(ring: VRing, sample_rate: i64) -> i64
+  let n = ring_len(ring)
+  if n < 4 do return 0 end
+
+  -- Find peaks: sample[i] > sample[i-1] and sample[i] > sample[i+1] and > threshold
+  let peaks:    [i64] = []
+  let threshold = 600    -- raw ADC above baseline
+  let baseline  = 2048
+  let i: i64 = 1
+  while i < n - 1 do
+    let prev = ring_peek(ring, i - 1)
+    let curr = ring_peek(ring, i)
+    let next = ring_peek(ring, i + 1)
+    if curr > prev and curr > next and (curr - baseline) > threshold do
+      push(peaks, i)
+    end
+    i += 1
+  end
+
+  let npks = arr_len(peaks)
+  if npks < 2 do return 0 end
+
+  -- Average RR interval → BPM
+  let rr_sum: i64 = 0
+  let pi: i64 = 1
+  while pi < npks do
+    rr_sum += peaks[pi] - peaks[pi - 1]
+    pi += 1
+  end
+  let rr_mean = rr_sum / (npks - 1)
+  if rr_mean == 0 do return 0 end
+  return (sample_rate * 60) / rr_mean
+end
+
+fn run_cardiac_monitor()
+  print("\n[ECG] Cardiac monitor — simulating 10s of ECG @ " .. int_to_str(ECG_SAMPLE_RATE) .. "Hz")
+  let ring: VRing = ring_new(ECG_BUF_SIZE)
+  let baseline = 2048
+  let bpm_prev: i64 = 0
+  let t: i64 = 0
+  let samples = ECG_SAMPLE_RATE * 10
+
+  while t < samples do
+    -- Simulate ~72 BPM (R-R interval ≈ 694ms = 347 samples at 500Hz)
+    -- Simple triangular R-peak model
+    let phase = t % 347
+    let raw: i64 = baseline
+    if phase < 5 do
+      raw = baseline + phase * 200         -- rising edge
+    elseif phase < 10 do
+      raw = baseline + (10 - phase) * 200  -- falling edge
+    end
+
+    ring_push(ring, raw)
+
+    -- Evaluate every second
+    if t % ECG_SAMPLE_RATE == 0 and t > 0 do
+      let bpm = ecg_detect_rate(ring, ECG_SAMPLE_RATE)
+      let flag: str = ""
+      if bpm > 0 and (bpm < 40 or bpm > 180) do flag = "  *** ALARM ***" end
+      print("  t=" .. int_to_str(t / ECG_SAMPLE_RATE) ..
+            "s  bpm=" .. int_to_str(bpm) .. flag)
+    end
+    t += 1
+  end
+  ring_free(ring)
+end
+
+-- ── Signal processing utilities demo ─────────────────────────────────────────
+
+fn run_dsp_demo()
+  print("\n[DSP] Signal processing primitives:")
+  -- EMA convergence over 20 steps
+  let ema_v: f64 = 0.0
+  let target: f64 = 100.0
+  let a:      f64 = 0.2
+  let i: i64 = 0
+  while i < 20 do
+    ema_v = ema(ema_v, target, a)
+    if i % 4 == 0 do
+      print("  ema step " .. int_to_str(i) .. " = " .. float_to_str(ema_v))
+    end
+    i += 1
+  end
+
+  -- clamp_i / clamp_f
+  print("  clamp_i(1500, 1000, 2000) = " .. int_to_str(clamp_i(1500, 1000, 2000)))
+  print("  clamp_i(2500, 1000, 2000) = " .. int_to_str(clamp_i(2500, 1000, 2000)))
+  print("  clamp_f(3.7,  0.0, 1.0)  = " .. float_to_str(clamp_f(3.7, 0.0, 1.0)))
+
+  -- map_range: ADC 0-4095 → physical force 0.0-10.0 N
+  let adc: i64 = 3000
+  let force = map_range(adc as f64, 0.0, 4095.0, 0.0, 10.0)
+  print("  ADC " .. int_to_str(adc) .. " → " .. float_to_str(force) .. " N")
+
+  -- median3: noise-robust sample
+  let m = median3(1840, 2100, 1960)
+  print("  median3(1840, 2100, 1960) = " .. int_to_str(m))
+
+  -- lpf_alpha: cutoff 20Hz at 1kHz sample rate
+  let lp = lpf_alpha(20.0, 1000.0)
+  print("  lpf_alpha(20Hz, 1kHz) = " .. float_to_str(lp))
+end
+
+-- ── Timing demo ───────────────────────────────────────────────────────────────
+
+fn run_timing_demo()
+  print("\n[TIME] Precision timing:")
+  let t0 = ticks()
+  sleep_us(5000)          -- 5ms
+  let t1 = ticks()
+  let elapsed_us = (t1 - t0) / 1000
+  print("  sleep_us(5000) → actual elapsed ≈ " .. int_to_str(elapsed_us) .. " µs")
+
+  -- Measure loop rate
+  let loop_t0 = ticks()
+  let n: i64 = 100000
+  let sum: i64 = 0
+  let j: i64 = 0
+  while j < n do
+    sum += j
+    j += 1
+  end
+  let loop_ns = (ticks() - loop_t0) / n
+  print("  " .. int_to_str(n) .. "-iteration loop: ~" .. int_to_str(loop_ns) .. " ns/iter")
+end
+
+-- ── @interrupt function pattern ───────────────────────────────────────────────
+-- On real Cortex-M4 hardware, ADC IRQ handler emitting into a ring buffer:
+--
+--   @interrupt fn ADC1_IRQHandler()
+--     let raw: i64 = (ADC1_DR & 0xFFF) as i64
+--     ring_push(emg_ring, raw)
+--   end
+--
+-- Volta emits: __attribute__((interrupt)) void ADC1_IRQHandler(void) { ... }
+-- Zero overhead, same binary as hand-written C. No RTOS required.
+
+-- ── Entry point ───────────────────────────────────────────────────────────────
+
+fn main()
+  print("╔═══════════════════════════════════════════════════════╗")
+  print("║  Anthem Bionics — Volta Signal Processing Demo        ║")
+  print("╚═══════════════════════════════════════════════════════╝")
+  print("")
+
+  let final_score = run_emg_pipeline()
+  print("\n[EMG] Final contraction score: " .. int_to_str(final_score))
+
+  run_servo_demo(final_score)
+  run_cardiac_monitor()
+  run_dsp_demo()
+  run_timing_demo()
+
+  print("\n[OK] All systems nominal.")
+end
+
+main()
