@@ -98,6 +98,25 @@ impl Emitter {
         self.fn_types.insert("ring_len".into(),     "int64_t".into());
         self.fn_types.insert("ring_full".into(),    "bool".into());
         self.fn_types.insert("ring_empty".into(),   "bool".into());
+        // Memory inspection builtins
+        self.fn_types.insert("mem_read_u8".into(),   "int64_t".into());
+        self.fn_types.insert("mem_read_u16".into(),  "int64_t".into());
+        self.fn_types.insert("mem_read_u32".into(),  "int64_t".into());
+        self.fn_types.insert("mem_read_u64".into(),  "int64_t".into());
+        self.fn_types.insert("mem_write_u8".into(),  "void".into());
+        self.fn_types.insert("mem_write_u16".into(), "void".into());
+        self.fn_types.insert("mem_write_u32".into(), "void".into());
+        self.fn_types.insert("mem_write_u64".into(), "void".into());
+        self.fn_types.insert("ptr_add".into(),       "void*".into());
+        self.fn_types.insert("ptr_to_int".into(),    "int64_t".into());
+        self.fn_types.insert("int_to_ptr".into(),    "void*".into());
+        self.fn_types.insert("mem_aligned".into(),   "bool".into());
+        self.fn_types.insert("mem_copy".into(),      "void".into());
+        self.fn_types.insert("mem_set".into(),       "void".into());
+        self.fn_types.insert("mem_scan".into(),      "int64_t".into());
+        self.fn_types.insert("mem_diff".into(),      "int64_t".into());
+        self.fn_types.insert("mem_dump".into(),      "void".into());
+        self.fn_types.insert("mem_addr_str".into(),  "const char*".into());
         // Register memory / arena builtins so infer_type works on their calls
         self.fn_types.insert("alloc".into(),           "void*".into());
         self.fn_types.insert("free".into(),            "void".into());
@@ -498,6 +517,53 @@ impl Emitter {
         self.line(r#"  #define _VOLT_DISABLE_IRQ() ((void)0)"#);
         self.line(r#"  #define _VOLT_ENABLE_IRQ()  ((void)0)"#);
         self.line(r#"#endif"#);
+        // ── Low-level memory inspection ─────────────────────────────────────
+        // Typed volatile reads — safe to use on MMIO registers
+        self.line(r#"static int64_t mem_read_u8 (const void*p){return (int64_t)*(volatile const uint8_t* )p;}"#);
+        self.line(r#"static int64_t mem_read_u16(const void*p){return (int64_t)*(volatile const uint16_t*)p;}"#);
+        self.line(r#"static int64_t mem_read_u32(const void*p){return (int64_t)*(volatile const uint32_t*)p;}"#);
+        self.line(r#"static int64_t mem_read_u64(const void*p){return (int64_t)*(volatile const uint64_t*)p;}"#);
+        // Typed volatile writes
+        self.line(r#"static void mem_write_u8 (void*p,int64_t v){*(volatile uint8_t* )p=(uint8_t )v;}"#);
+        self.line(r#"static void mem_write_u16(void*p,int64_t v){*(volatile uint16_t*)p=(uint16_t)v;}"#);
+        self.line(r#"static void mem_write_u32(void*p,int64_t v){*(volatile uint32_t*)p=(uint32_t)v;}"#);
+        self.line(r#"static void mem_write_u64(void*p,int64_t v){*(volatile uint64_t*)p=(uint64_t)v;}"#);
+        // Pointer arithmetic
+        self.line(r#"static void* ptr_add(const void*p,int64_t off){return(void*)((const uint8_t*)p+off);}"#);
+        self.line(r#"static int64_t ptr_to_int(const void*p){return(int64_t)(uintptr_t)p;}"#);
+        self.line(r#"static void* int_to_ptr(int64_t v){return(void*)(uintptr_t)v;}"#);
+        self.line(r#"static bool mem_aligned(const void*p,int64_t align){return align>0&&((uintptr_t)p%((uintptr_t)align))==0;}"#);
+        // Raw copy / fill
+        self.line(r#"static void mem_copy(void*dst,const void*src,int64_t len){memcpy(dst,src,(size_t)len);}"#);
+        self.line(r#"static void mem_set(void*dst,int64_t val,int64_t len){memset(dst,(int)val,(size_t)len);}"#);
+        // Pattern scan — searches for hex-encoded pattern string "deadbeef" in a byte buffer
+        // Returns byte offset of first match or -1
+        self.line(r#"static int64_t mem_scan(const void*buf,int64_t blen,const char*hex_pat){"#);
+        self.line(r#"    int64_t plen=(int64_t)strlen(hex_pat);if(plen%2!=0||plen==0)return -1;"#);
+        self.line(r#"    int64_t nbytes=plen/2;"#);
+        self.line(r#"    uint8_t pat[256];if(nbytes>256)return -1;"#);
+        self.line(r#"    for(int64_t i=0;i<nbytes;i++){unsigned int b;if(sscanf(hex_pat+i*2,"%02x",&b)!=1)return -1;pat[i]=(uint8_t)b;}"#);
+        self.line(r#"    const uint8_t*p=(const uint8_t*)buf;"#);
+        self.line(r#"    for(int64_t i=0;i<=blen-nbytes;i++){if(memcmp(p+i,pat,nbytes)==0)return i;}"#);
+        self.line(r#"    return -1;}"#);
+        // Memory diff — compare two regions, print each differing byte offset
+        self.line(r#"static int64_t mem_diff(const void*a,const void*b,int64_t len){"#);
+        self.line(r#"    const uint8_t*pa=(const uint8_t*)a,*pb=(const uint8_t*)b;"#);
+        self.line(r#"    int64_t ndiff=0;"#);
+        self.line(r#"    for(int64_t i=0;i<len;i++){if(pa[i]!=pb[i]){printf("  [+0x%04llx]  %02x  vs  %02x\n",(long long)i,pa[i],pb[i]);ndiff++;}}"#);
+        self.line(r#"    return ndiff;}"#);
+        // Full hex+ASCII dump with address labels, 16 bytes per row
+        self.line(r#"static void mem_dump(const void*ptr,int64_t len){"#);
+        self.line(r#"    const uint8_t*p=(const uint8_t*)ptr;"#);
+        self.line(r#"    for(int64_t row=0;row<len;row+=16){"#);
+        self.line(r#"        printf("%016llx  ",(unsigned long long)(uintptr_t)(p+row));"#);
+        self.line(r#"        for(int64_t col=0;col<16;col++){if(row+col<len)printf("%02x ",p[row+col]);else printf("   ");"#);
+        self.line(r#"            if(col==7)printf(" ");}"#);
+        self.line(r#"        printf(" |");"#);
+        self.line(r#"        for(int64_t col=0;col<16&&row+col<len;col++){uint8_t c=p[row+col];printf("%c",(c>=0x20&&c<0x7f)?c:'.');}"#);
+        self.line(r#"        printf("|\n");}}"#);
+        // Stack variable address helper — takes a pointer and prints it nicely
+        self.line(r#"static const char* mem_addr_str(const void*p){char*d=_vbuf+_vpos;int k=snprintf(d,32,"0x%016llx",(unsigned long long)(uintptr_t)p);_vpos=(_vpos+k+1)%131072;return d;}"#);
         self.line("// ───────────────────────────────────────────────────────────");
         self.line("");
     }
@@ -595,6 +661,7 @@ impl Emitter {
                     "str_replace","char_from","rot13","caesar","xor_str","hex",
                     "bytes_to_hex","arg_get","input","xor_encrypt","str_to_hex_str",
                     "greet","repeat_str","file_read","file_readline",
+                    "mem_addr_str",
                 ];
                 if STR_CALLS.contains(&name.as_str()) {
                     return "const char*".into();

@@ -1,0 +1,236 @@
+-- mem_inspect.vlt — Low-level memory inspection demo for Volta
+--
+-- Demonstrates the full memory inspection API:
+--   mem_dump       — hex+ASCII dump of any memory region (like xxd/hexdump -C)
+--   mem_read_u8/16/32/64 — typed volatile reads (safe for MMIO registers too)
+--   mem_write_u8/16/32/64 — typed volatile writes
+--   mem_scan       — pattern search (hex string) inside a buffer
+--   mem_diff       — byte-by-byte comparison of two memory regions
+--   mem_copy       — raw memcpy
+--   mem_set        — raw memset
+--   ptr_add        — pointer arithmetic
+--   ptr_to_int     — cast address to integer
+--   int_to_ptr     — cast integer to pointer
+--   mem_aligned    — alignment check
+--   mem_addr_str   — format pointer as "0x..." string
+
+-- ── Section 1: dump a stack struct ───────────────────────────────────────────
+
+struct Header
+  magic:   i64
+  version: i32
+  flags:   i32
+  size:    i64
+end
+
+fn demo_struct_dump()
+  print("══ 1. Struct memory layout ══════════════════════════════════════")
+  let h: Header = Header { magic: 0xDEADBEEFCAFEBABE, version: 3, flags: 0xFF, size: 1024 }
+  let p: ptr = &h
+  print("Header at " .. mem_addr_str(p))
+  print("  sizeof → " .. int_to_str(ptr_to_int(ptr_add(p, 0)) - ptr_to_int(p)) .. " (layout dump below)")
+  mem_dump(p, 24)
+
+  -- Field-by-field typed reads
+  let magic   = mem_read_u64(p)
+  let version = mem_read_u32(ptr_add(p, 8))
+  let flags   = mem_read_u32(ptr_add(p, 12))
+  let sz      = mem_read_u64(ptr_add(p, 16))
+  print("  magic=0x" .. hex(magic) ..
+        "  version=" .. int_to_str(version) ..
+        "  flags=0x" .. hex(flags) ..
+        "  size=" .. int_to_str(sz))
+end
+
+-- ── Section 2: pattern scan inside a buffer ──────────────────────────────────
+
+fn demo_pattern_scan()
+  print("\n══ 2. Pattern scan ═════════════════════════════════════════════")
+
+  -- Build a simulated firmware blob with a known sentinel buried inside
+  let blob: str = "VOLTPKGXX\x00\x00\xDE\xAD\xBE\xEF\x00\x00DATA_HERE"
+  let p: ptr = blob as ptr
+
+  -- Scan for the DEADBEEF sentinel (big-endian, so bytes: de ad be ef)
+  let offset = mem_scan(p, str_len(blob), "deadbeef")
+  if offset >= 0 do
+    print("  deadbeef sentinel found at offset +" .. int_to_str(offset))
+  else
+    print("  sentinel not found")
+  end
+
+  -- Scan for the ASCII "DATA" signature
+  let data_off = mem_scan(p, str_len(blob), "44415441")   -- "DATA" in hex
+  if data_off >= 0 do
+    print("  'DATA' signature at offset +" .. int_to_str(data_off))
+  end
+end
+
+-- ── Section 3: memory diff ───────────────────────────────────────────────────
+
+fn demo_mem_diff()
+  print("\n══ 3. Memory diff ══════════════════════════════════════════════")
+
+  -- Allocate two 32-byte regions and fill them identically
+  let a: ptr = alloc(32)
+  let b: ptr = alloc(32)
+  mem_set(a, 0x41, 32)   -- fill with 'A'
+  mem_set(b, 0x41, 32)
+
+  -- Corrupt a few bytes in b to simulate a tampered header
+  mem_write_u8(ptr_add(b, 4),  0xFF)
+  mem_write_u8(ptr_add(b, 16), 0x00)
+  mem_write_u8(ptr_add(b, 17), 0xBB)
+
+  print("  Comparing 32-byte regions (3 bytes tampered):")
+  let ndiff = mem_diff(a, b, 32)
+  print("  Total differences: " .. int_to_str(ndiff))
+
+  free(a)
+  free(b)
+end
+
+-- ── Section 4: raw read/write roundtrip ──────────────────────────────────────
+
+fn demo_rw_roundtrip()
+  print("\n══ 4. Typed read/write roundtrip ═══════════════════════════════")
+
+  let buf: ptr = alloc(16)
+  mem_set(buf, 0, 16)
+
+  -- Write known values at each width
+  mem_write_u8 (buf,           0xAB)
+  mem_write_u16(ptr_add(buf, 2),  0x1234)
+  mem_write_u32(ptr_add(buf, 4),  0xDEADBEEF)
+  mem_write_u64(ptr_add(buf, 8),  0xCAFEBABEFEEDF00D)
+
+  -- Dump raw bytes
+  print("  Raw buffer:")
+  mem_dump(buf, 16)
+
+  -- Read back
+  let r8  = mem_read_u8 (buf)
+  let r16 = mem_read_u16(ptr_add(buf, 2))
+  let r32 = mem_read_u32(ptr_add(buf, 4))
+  let r64 = mem_read_u64(ptr_add(buf, 8))
+
+  print("  u8  @ +0  = 0x" .. hex(r8))
+  print("  u16 @ +2  = 0x" .. hex(r16))
+  print("  u32 @ +4  = 0x" .. hex(r32))
+  print("  u64 @ +8  = 0x" .. hex(r64))
+
+  free(buf)
+end
+
+-- ── Section 5: alignment checks ──────────────────────────────────────────────
+
+fn demo_alignment()
+  print("\n══ 5. Alignment checks ═════════════════════════════════════════")
+
+  -- alloc returns malloc memory — at least 8-byte aligned on most platforms
+  let p: ptr = alloc(64)
+  let addr = ptr_to_int(p)
+
+  let aligns: [i64] = [1, 2, 4, 8, 16, 32, 64]
+  let i: i64 = 0
+  while i < arr_len(aligns) do
+    let a = aligns[i]
+    let ok = mem_aligned(p, a)
+    print("  aligned(" .. mem_addr_str(p) .. ", " .. int_to_str(a) .. ") = " .. bool_to_str(ok))
+    i += 1
+  end
+
+  -- Misaligned pointer (offset by 1)
+  let q = ptr_add(p, 1)
+  print("  aligned(p+1, 4)  = " .. bool_to_str(mem_aligned(q, 4)))
+
+  free(p)
+end
+
+-- ── Section 6: pointer arithmetic walk ───────────────────────────────────────
+
+fn demo_ptr_walk()
+  print("\n══ 6. Pointer arithmetic walk ══════════════════════════════════")
+
+  let n: i64 = 8
+  let buf: ptr = alloc(n * 8)   -- 8 × i64 slots
+
+  -- Write 0..7 into each slot via ptr_add
+  let i: i64 = 0
+  while i < n do
+    mem_write_u64(ptr_add(buf, i * 8), i * i)
+    i += 1
+  end
+
+  print("  Squared values written via pointer arithmetic:")
+  let j: i64 = 0
+  while j < n do
+    let slot = ptr_add(buf, j * 8)
+    let val  = mem_read_u64(slot)
+    print("  [" .. int_to_str(j) .. "] @ " .. mem_addr_str(slot) .. "  =  " .. int_to_str(val))
+    j += 1
+  end
+
+  free(buf)
+end
+
+-- ── Section 7: simulated MMIO register peek ──────────────────────────────────
+--
+-- On embedded targets, replace `alloc` with a literal address cast:
+--   let gpio = int_to_ptr(0x40020000)
+-- Here we simulate MMIO registers with a heap buffer.
+
+fn demo_mmio_sim()
+  print("\n══ 7. Simulated MMIO register bank ═════════════════════════════")
+
+  -- Fake peripheral: 4 × 32-bit registers at a known base
+  let base: ptr = alloc(16)
+  mem_set(base, 0, 16)
+
+  -- DR (data register): offset 0x00
+  -- CR1 (control 1):    offset 0x04
+  -- CR2 (control 2):    offset 0x08
+  -- SR  (status):       offset 0x0C
+
+  -- Simulate: controller writes ADON bit (bit 0) to CR1 to enable ADC
+  let cr1 = ptr_add(base, 4)
+  mem_write_u32(cr1, mem_read_u32(cr1) | 0x00000001)
+
+  -- Simulate: ADC completes → hardware writes EOC bit (bit 1) to SR and a sample to DR
+  let sr = ptr_add(base, 12)
+  mem_write_u32(sr, 0x00000002)    -- EOC set
+  mem_write_u32(base, 0x00000A4B)  -- 12-bit sample in DR
+
+  -- Volta firmware reads:
+  let status = mem_read_u32(sr)
+  if status & 0x2 != 0 do
+    let raw = mem_read_u32(base) & 0xFFF
+    print("  ADC EOC set — DR sample = " .. int_to_str(raw) .. " (0x" .. hex(raw) .. ")")
+  end
+
+  print("  Register bank dump (base = " .. mem_addr_str(base) .. "):")
+  mem_dump(base, 16)
+
+  free(base)
+end
+
+-- ── Entry point ───────────────────────────────────────────────────────────────
+
+fn main()
+  print("╔═══════════════════════════════════════════════════════╗")
+  print("║  Volta — Low-level Memory Inspection Demo             ║")
+  print("╚═══════════════════════════════════════════════════════╝")
+  print("")
+
+  demo_struct_dump()
+  demo_pattern_scan()
+  demo_mem_diff()
+  demo_rw_roundtrip()
+  demo_alignment()
+  demo_ptr_walk()
+  demo_mmio_sim()
+
+  print("\n[OK] Memory inspection demo complete.")
+end
+
+main()

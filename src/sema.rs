@@ -286,6 +286,25 @@ impl Checker {
         c.fn_types.insert("ring_full".into(),       VType::Bool);
         c.fn_types.insert("ring_empty".into(),      VType::Bool);
         c.fn_types.insert("ring_free".into(),       VType::Nil);
+        // ── Memory inspection ────────────────────────────────────────────────────
+        c.fn_types.insert("mem_read_u8".into(),   VType::Int);
+        c.fn_types.insert("mem_read_u16".into(),  VType::Int);
+        c.fn_types.insert("mem_read_u32".into(),  VType::Int);
+        c.fn_types.insert("mem_read_u64".into(),  VType::Int);
+        c.fn_types.insert("mem_write_u8".into(),  VType::Nil);
+        c.fn_types.insert("mem_write_u16".into(), VType::Nil);
+        c.fn_types.insert("mem_write_u32".into(), VType::Nil);
+        c.fn_types.insert("mem_write_u64".into(), VType::Nil);
+        c.fn_types.insert("ptr_add".into(),       VType::Ptr);
+        c.fn_types.insert("ptr_to_int".into(),    VType::Int);
+        c.fn_types.insert("int_to_ptr".into(),    VType::Ptr);
+        c.fn_types.insert("mem_aligned".into(),   VType::Bool);
+        c.fn_types.insert("mem_copy".into(),      VType::Nil);
+        c.fn_types.insert("mem_set".into(),       VType::Nil);
+        c.fn_types.insert("mem_scan".into(),      VType::Int);
+        c.fn_types.insert("mem_diff".into(),      VType::Int);
+        c.fn_types.insert("mem_dump".into(),      VType::Nil);
+        c.fn_types.insert("mem_addr_str".into(),  VType::Str);
         c
     }
 
