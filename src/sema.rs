@@ -286,6 +286,22 @@ impl Checker {
         c.fn_types.insert("ring_full".into(),       VType::Bool);
         c.fn_types.insert("ring_empty".into(),      VType::Bool);
         c.fn_types.insert("ring_free".into(),       VType::Nil);
+        // ── Binary / executable analysis ─────────────────────────────────────────
+        c.fn_types.insert("file_read_bin".into(),    VType::Ptr);
+        c.fn_types.insert("buf_entropy".into(),      VType::Float);
+        c.fn_types.insert("strings_extract".into(),  VType::Array("str".into()));
+        c.fn_types.insert("buf_find_str".into(),     VType::Int);
+        c.fn_types.insert("pe_is_valid".into(),      VType::Bool);
+        c.fn_types.insert("pe_header_offset".into(), VType::Int);
+        c.fn_types.insert("pe_machine".into(),       VType::Int);
+        c.fn_types.insert("pe_num_sections".into(),  VType::Int);
+        c.fn_types.insert("pe_entry_point".into(),   VType::Int);
+        c.fn_types.insert("pe_image_base".into(),    VType::Int);
+        c.fn_types.insert("pe_machine_name".into(),  VType::Str);
+        c.fn_types.insert("elf_is_valid".into(),     VType::Bool);
+        c.fn_types.insert("elf_arch".into(),         VType::Int);
+        c.fn_types.insert("elf_arch_name".into(),    VType::Str);
+        c.fn_types.insert("elf_entry_point".into(),  VType::Int);
         // ── Memory inspection ────────────────────────────────────────────────────
         c.fn_types.insert("mem_read_u8".into(),   VType::Int);
         c.fn_types.insert("mem_read_u16".into(),  VType::Int);

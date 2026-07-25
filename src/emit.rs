@@ -98,6 +98,22 @@ impl Emitter {
         self.fn_types.insert("ring_len".into(),     "int64_t".into());
         self.fn_types.insert("ring_full".into(),    "bool".into());
         self.fn_types.insert("ring_empty".into(),   "bool".into());
+        // Binary / executable analysis builtins
+        self.fn_types.insert("file_read_bin".into(),    "void*".into());
+        self.fn_types.insert("buf_entropy".into(),      "double".into());
+        self.fn_types.insert("strings_extract".into(),  "VArray".into());
+        self.fn_types.insert("buf_find_str".into(),     "int64_t".into());
+        self.fn_types.insert("pe_is_valid".into(),      "bool".into());
+        self.fn_types.insert("pe_header_offset".into(), "int64_t".into());
+        self.fn_types.insert("pe_machine".into(),       "int64_t".into());
+        self.fn_types.insert("pe_num_sections".into(),  "int64_t".into());
+        self.fn_types.insert("pe_entry_point".into(),   "int64_t".into());
+        self.fn_types.insert("pe_image_base".into(),    "int64_t".into());
+        self.fn_types.insert("pe_machine_name".into(),  "const char*".into());
+        self.fn_types.insert("elf_is_valid".into(),     "bool".into());
+        self.fn_types.insert("elf_arch".into(),         "int64_t".into());
+        self.fn_types.insert("elf_arch_name".into(),    "const char*".into());
+        self.fn_types.insert("elf_entry_point".into(),  "int64_t".into());
         // Memory inspection builtins
         self.fn_types.insert("mem_read_u8".into(),   "int64_t".into());
         self.fn_types.insert("mem_read_u16".into(),  "int64_t".into());
@@ -401,7 +417,10 @@ impl Emitter {
         self.line(r#"static bool file_append(const char* path,const char* data){FILE*f=fopen(path,"a");if(!f)return false;fputs(data,f);fclose(f);return true;}"#);
         self.line(r#"static bool file_exists(const char* path){FILE*f=fopen(path,"r");if(!f)return false;fclose(f);return true;}"#);
         self.line(r#"static bool file_delete(const char* path){return remove(path)==0;}"#);
-        self.line(r#"static int64_t file_size(const char* path){FILE*f=fopen(path,"r");if(!f)return -1;fseek(f,0,SEEK_END);long sz=ftell(f);fclose(f);return (int64_t)sz;}"#);
+        self.line(r#"static int64_t file_size(const char* path){FILE*f=fopen(path,"rb");if(!f)return -1;fseek(f,0,SEEK_END);long sz=ftell(f);fclose(f);return (int64_t)sz;}"#);
+        // Binary-safe file read — opens in "rb", returns malloc'd buffer (caller must free())
+        // Use file_size() to get the byte count. Returns NULL on error.
+        self.line(r#"static void* file_read_bin(const char*path){FILE*f=fopen(path,"rb");if(!f)return NULL;fseek(f,0,SEEK_END);long sz=ftell(f);rewind(f);if(sz<=0){fclose(f);return NULL;}void*buf=malloc((size_t)sz);if(!buf){fclose(f);return NULL;}fread(buf,1,(size_t)sz,f);fclose(f);return buf;}"#);
         self.line(r#"static const char* file_readline(const char* path,int64_t n){FILE*f=fopen(path,"r");if(!f)return "";char line[4096];int64_t i=0;while(i<=n&&fgets(line,sizeof(line),f)){if(i==n){fclose(f);char*d=_vbuf+_vpos;int len=strlen(line);if(len>0&&line[len-1]=='\n')line[--len]=0;memcpy(d,line,len+1);_vpos=(_vpos+len+1)%131072;return d;}i++;}fclose(f);return "";}"#);
         self.line(r#"#include <sys/socket.h>"#);
         self.line(r#"#include <netinet/in.h>"#);
@@ -517,6 +536,26 @@ impl Emitter {
         self.line(r#"  #define _VOLT_DISABLE_IRQ() ((void)0)"#);
         self.line(r#"  #define _VOLT_ENABLE_IRQ()  ((void)0)"#);
         self.line(r#"#endif"#);
+        // ── Binary / executable analysis ────────────────────────────────────
+        // Entropy of a raw binary buffer — handles null bytes (unlike entropy() which is string-based)
+        self.line(r#"static double buf_entropy(const void*buf,int64_t len){if(len<=0)return 0.0;int64_t freq[256]={0};const uint8_t*p=(const uint8_t*)buf;for(int64_t i=0;i<len;i++)freq[p[i]]++;double e=0.0;for(int i=0;i<256;i++){if(freq[i]>0){double pr=(double)freq[i]/(double)len;e-=pr*log2(pr);}}return e;}"#);
+        // Scan a binary buffer for printable ASCII runs of at least min_len bytes
+        self.line(r#"static VArray strings_extract(const void*buf,int64_t len,int64_t min_len){VArray a=_arr_new(64);const uint8_t*p=(const uint8_t*)buf;int64_t rs=-1,rl=0;for(int64_t i=0;i<=len;i++){uint8_t c=(i<len)?p[i]:0;if(i<len&&c>=0x20&&c<0x7f){if(rs<0)rs=i;rl++;}else{if(rl>=min_len){char*d=_vbuf+_vpos;if(rl<65000){memcpy(d,p+rs,rl);d[rl]='\0';_vpos=(_vpos+rl+1)%131072;_arr_push(&a,(void*)d);}}rs=-1;rl=0;}}return a;}"#);
+        // Search for a plain ASCII string inside a binary buffer — returns offset or -1
+        self.line(r#"static int64_t buf_find_str(const void*buf,int64_t len,const char*pat){int64_t pl=(int64_t)strlen(pat);if(pl==0||pl>len)return -1;const uint8_t*p=(const uint8_t*)buf;for(int64_t i=0;i<=len-pl;i++){if(memcmp(p+i,pat,(size_t)pl)==0)return i;}return -1;}"#);
+        // ── PE (Windows Portable Executable) helpers ─────────────────────────
+        self.line(r#"static bool pe_is_valid(const void*buf){const uint8_t*p=(const uint8_t*)buf;return p[0]==0x4D&&p[1]==0x5A;}"#);
+        self.line(r#"static int64_t pe_header_offset(const void*buf){return (int64_t)(*(const uint32_t*)((const uint8_t*)buf+0x3C));}"#);
+        self.line(r#"static int64_t pe_machine(const void*buf){int64_t o=pe_header_offset(buf);return (int64_t)(*(const uint16_t*)((const uint8_t*)buf+o+4));}"#);
+        self.line(r#"static int64_t pe_num_sections(const void*buf){int64_t o=pe_header_offset(buf);return (int64_t)(*(const uint16_t*)((const uint8_t*)buf+o+6));}"#);
+        self.line(r#"static int64_t pe_entry_point(const void*buf){int64_t o=pe_header_offset(buf);return (int64_t)(*(const uint32_t*)((const uint8_t*)buf+o+40));}"#);
+        self.line(r#"static int64_t pe_image_base(const void*buf){int64_t o=pe_header_offset(buf);uint16_t magic=*(const uint16_t*)((const uint8_t*)buf+o+24);if(magic==0x020B)return (int64_t)(*(const uint64_t*)((const uint8_t*)buf+o+48));return (int64_t)(*(const uint32_t*)((const uint8_t*)buf+o+52));}"#);
+        self.line(r#"static const char* pe_machine_name(const void*buf){int64_t m=pe_machine(buf);switch(m){case 0x014c:return "x86";case 0x8664:return "x86-64";case 0x01c4:return "ARM";case 0xaa64:return "ARM64";case 0x0200:return "IA-64";default:{char*d=_vbuf+_vpos;snprintf(d,16,"0x%04llx",(long long)m);_vpos=(_vpos+16)%131072;return d;}}}"#);
+        // ── ELF (Linux/Unix) helpers ──────────────────────────────────────────
+        self.line(r#"static bool elf_is_valid(const void*buf){const uint8_t*p=(const uint8_t*)buf;return p[0]==0x7F&&p[1]==0x45&&p[2]==0x4C&&p[3]==0x46;}"#);
+        self.line(r#"static int64_t elf_arch(const void*buf){return (int64_t)(*(const uint16_t*)((const uint8_t*)buf+18));}"#);
+        self.line(r#"static const char* elf_arch_name(const void*buf){int64_t m=elf_arch(buf);switch(m){case 0x03:return "x86";case 0x3e:return "x86-64";case 0x28:return "ARM";case 0xb7:return "ARM64";case 0xf3:return "RISC-V";case 0x08:return "MIPS";default:{char*d=_vbuf+_vpos;snprintf(d,16,"0x%04llx",(long long)m);_vpos=(_vpos+16)%131072;return d;}}}"#);
+        self.line(r#"static int64_t elf_entry_point(const void*buf){uint8_t bits=((const uint8_t*)buf)[4];if(bits==2)return (int64_t)(*(const uint64_t*)((const uint8_t*)buf+24));return (int64_t)(*(const uint32_t*)((const uint8_t*)buf+24));}"#);
         // ── Low-level memory inspection ─────────────────────────────────────
         // Typed volatile reads — safe to use on MMIO registers
         self.line(r#"static int64_t mem_read_u8 (const void*p){return (int64_t)*(volatile const uint8_t* )p;}"#);
@@ -662,6 +701,7 @@ impl Emitter {
                     "bytes_to_hex","arg_get","input","xor_encrypt","str_to_hex_str",
                     "greet","repeat_str","file_read","file_readline",
                     "mem_addr_str",
+                    "pe_machine_name", "elf_arch_name",
                 ];
                 if STR_CALLS.contains(&name.as_str()) {
                     return "const char*".into();

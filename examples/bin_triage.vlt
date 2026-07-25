@@ -1,0 +1,333 @@
+-- bin_triage.vlt — Stage-1 binary triage tool
+--
+-- Usage:  volta bin_triage.vlt <target.exe>
+--
+-- Runs the following checks in order:
+--   1. File size + format detection (PE / ELF / unknown)
+--   2. PE header walk: machine, sections, entry point, image base
+--   3. Entropy scan — flag packed / encrypted sections
+--   4. String extraction — printable runs ≥ 6 bytes
+--   5. Interesting string filter — DLL names, URLs, registry keys, IPs
+--   6. Byte pattern hunts — known shellcode stubs, packers, magic bytes
+--   7. XOR decode attempt on first 256 bytes (common obfuscation layer)
+--
+-- Output is plain text — pipe it to a file or grep as needed.
+
+-- ── Helpers ──────────────────────────────────────────────────────────────────
+
+fn banner(title: str)
+  print("\n╔══════════════════════════════════════════════════════════════╗")
+  print("║  " .. title)
+  print("╚══════════════════════════════════════════════════════════════╝")
+end
+
+fn flag(label: str, value: str)
+  print("  [!] " .. label .. ": " .. value)
+end
+
+fn info(label: str, value: str)
+  print("  [ ] " .. label .. ": " .. value)
+end
+
+-- Entropy label for human output
+fn entropy_label(e: f64) -> str
+  if e > 7.5 do return "ENCRYPTED or PACKED (very high)" end
+  if e > 7.0 do return "likely compressed / obfuscated (high)" end
+  if e > 6.0 do return "moderately random (elevated)" end
+  return "normal"
+end
+
+-- Check if a string looks interesting for triage
+fn is_interesting(s: str) -> bool
+  -- DLL / API imports
+  if str_ends_with(s, ".dll") do return true end
+  if str_ends_with(s, ".DLL") do return true end
+  if str_ends_with(s, ".exe") do return true end
+  -- URLs and network
+  if str_starts_with(s, "http") do return true end
+  if str_contains(s, "://")    do return true end
+  -- Registry
+  if str_starts_with(s, "HKEY_") do return true end
+  if str_starts_with(s, "SOFTWARE\\") do return true end
+  -- Paths
+  if str_starts_with(s, "C:\\") do return true end
+  if str_starts_with(s, "/etc/") do return true end
+  if str_starts_with(s, "/tmp/") do return true end
+  -- Suspicious API names
+  if str_contains(s, "VirtualAlloc")  do return true end
+  if str_contains(s, "WriteProcess")  do return true end
+  if str_contains(s, "CreateThread")  do return true end
+  if str_contains(s, "ShellExecute")  do return true end
+  if str_contains(s, "WinExec")       do return true end
+  if str_contains(s, "LoadLibrary")   do return true end
+  if str_contains(s, "GetProcAddr")   do return true end
+  if str_contains(s, "CryptEncrypt")  do return true end
+  if str_contains(s, "WSAStartup")    do return true end
+  if str_contains(s, "InternetOpen")  do return true end
+  return false
+end
+
+-- ── Section 1: load + format detect ─────────────────────────────────────────
+
+fn check_format(path: str) -> ptr
+  let sz = file_size(path)
+  if sz < 0 do
+    print("[ERR] Cannot open: " .. path)
+    return nil
+  end
+
+  banner("1. File info")
+  info("path", path)
+  info("size", int_to_str(sz) .. " bytes (" .. int_to_str(sz / 1024) .. " KB)")
+
+  let buf = file_read_bin(path)
+  if buf == nil do
+    print("[ERR] file_read_bin failed")
+    return nil
+  end
+
+  -- Format detection
+  if pe_is_valid(buf) do
+    info("format", "PE (Windows Portable Executable)")
+  elseif elf_is_valid(buf) do
+    info("format", "ELF (Linux / Unix executable)")
+  else
+    -- Check for common containers
+    let magic4 = mem_read_u32(buf)
+    if magic4 == 0x504B0304 do
+      info("format", "ZIP / JAR / APKK archive")
+    elseif magic4 == 0xFEEDFACE or magic4 == 0xCEFAEDFE do
+      info("format", "Mach-O (macOS / iOS)")
+    else
+      flag("format", "UNKNOWN — check magic bytes: 0x" .. hex(magic4))
+    end
+  end
+
+  return buf
+end
+
+-- ── Section 2: PE header walk ────────────────────────────────────────────────
+
+fn check_pe_headers(buf: ptr)
+  if !pe_is_valid(buf) do return end
+
+  banner("2. PE header")
+
+  let pe_off   = pe_header_offset(buf)
+  let machine  = pe_machine_name(buf)
+  let nsect    = pe_num_sections(buf)
+  let ep       = pe_entry_point(buf)
+  let imgbase  = pe_image_base(buf)
+
+  info("PE header offset", "0x" .. hex(pe_off))
+  info("machine",          machine)
+  info("sections",         int_to_str(nsect))
+  info("entry point RVA",  "0x" .. hex(ep))
+  info("image base",       "0x" .. hex(imgbase))
+  info("virtual EP",       "0x" .. hex(imgbase + ep))
+
+  -- Sanity checks
+  if ep == 0 do
+    flag("entry point", "zero — possibly a DLL with no entry, or packed")
+  end
+  if nsect > 20 do
+    flag("section count", int_to_str(nsect) .. " — unusually high")
+  end
+end
+
+-- ── Section 3: ELF header walk ───────────────────────────────────────────────
+
+fn check_elf_headers(buf: ptr)
+  if !elf_is_valid(buf) do return end
+
+  banner("2. ELF header")
+  info("arch",        elf_arch_name(buf))
+  info("entry point", "0x" .. hex(elf_entry_point(buf)))
+end
+
+-- ── Section 4: entropy ───────────────────────────────────────────────────────
+
+fn check_entropy(buf: ptr, sz: i64)
+  banner("3. Entropy")
+
+  let e = buf_entropy(buf, sz)
+  let label = entropy_label(e)
+  let e_str = float_to_str(e)
+
+  if e > 7.0 do
+    flag("whole-file entropy", e_str .. " — " .. label)
+  else
+    info("whole-file entropy", e_str .. " — " .. label)
+  end
+
+  -- Sample the first 4 KB separately — high entropy here is especially suspicious
+  let head_sz = sz
+  if head_sz > 4096 do head_sz = 4096 end
+  let head_e = buf_entropy(buf, head_sz)
+  let head_label = entropy_label(head_e)
+  if head_e > 7.0 do
+    flag("first-4KB entropy", float_to_str(head_e) .. " — " .. head_label)
+  else
+    info("first-4KB entropy", float_to_str(head_e) .. " — " .. head_label)
+  end
+end
+
+-- ── Section 5: string extraction ─────────────────────────────────────────────
+
+fn check_strings(buf: ptr, sz: i64)
+  banner("4. String artifacts (≥6 chars)")
+
+  let all_strs = strings_extract(buf, sz, 6)
+  let total    = arr_len(all_strs)
+  info("printable strings found", int_to_str(total))
+
+  -- Walk and flag interesting ones
+  let hits: i64 = 0
+  let i: i64 = 0
+  while i < total do
+    let s = all_strs[i] as str
+    if is_interesting(s) do
+      flag("string", s)
+      hits += 1
+    end
+    i += 1
+  end
+
+  if hits == 0 do
+    info("interesting strings", "none found — binary may be packed or stripped")
+  end
+end
+
+-- ── Section 6: pattern hunts ─────────────────────────────────────────────────
+
+fn check_patterns(buf: ptr, sz: i64)
+  banner("5. Byte pattern hunts")
+
+  -- Common shellcode: call-pop to get EIP (e8 00 00 00 00 5b)
+  let off = mem_scan(buf, sz, "e80000000058")
+  if off >= 0 do
+    flag("call+pop (get-EIP stub)", "offset 0x" .. hex(off))
+  end
+
+  -- NOP sled (8+ consecutive 0x90)
+  let nop_off = mem_scan(buf, sz, "9090909090909090")
+  if nop_off >= 0 do
+    flag("NOP sled", "offset 0x" .. hex(nop_off))
+  end
+
+  -- UPX packer signature "UPX!"
+  let upx_off = buf_find_str(buf, sz, "UPX!")
+  if upx_off >= 0 do
+    flag("UPX packer", "signature at offset 0x" .. hex(upx_off))
+  end
+
+  -- MZPE double-header (PE embedded inside PE)
+  if pe_is_valid(buf) do
+    let pe_inner = buf_find_str(ptr_add(buf, 2), sz - 2, "MZ")
+    if pe_inner >= 0 do
+      flag("embedded MZ header", "offset 0x" .. hex(pe_inner + 2))
+    end
+  end
+
+  -- Common crypto constants: AES S-box start (63 7c 77 7b)
+  let aes_off = mem_scan(buf, sz, "637c777b")
+  if aes_off >= 0 do
+    flag("AES S-box constant", "offset 0x" .. hex(aes_off) .. " — AES likely in use")
+  end
+
+  -- PowerShell download cradle signature
+  let ps_off = buf_find_str(buf, sz, "DownloadString")
+  if ps_off >= 0 do
+    flag("PowerShell download cradle", "offset 0x" .. hex(ps_off))
+  end
+
+  -- WinInet / HTTP strings
+  let inet_off = buf_find_str(buf, sz, "WinHttpOpen")
+  if inet_off >= 0 do
+    flag("WinHTTP usage", "offset 0x" .. hex(inet_off))
+  end
+end
+
+-- ── Section 7: XOR decode sweep ───────────────────────────────────────────────
+
+fn check_xor(buf: ptr, sz: i64)
+  banner("6. XOR obfuscation sweep (first 256 bytes)")
+
+  -- Sample the first 256 bytes
+  let sample_len = sz
+  if sample_len > 256 do sample_len = 256 end
+
+  -- Try every single-byte key; score by printable character count
+  let best_key:   i64 = 0
+  let best_score: i64 = 0
+  let key: i64 = 1
+  while key < 256 do
+    let score: i64 = 0
+    let j: i64 = 0
+    while j < sample_len do
+      let b = mem_read_u8(ptr_add(buf, j)) ^ key
+      if b >= 32 and b < 127 do score += 1 end
+      j += 1
+    end
+    if score > best_score do
+      best_score = score
+      best_key = key
+    end
+    key += 1
+  end
+
+  let pct = (best_score * 100) / sample_len
+  if pct > 70 do
+    flag("XOR key candidate", "0x" .. hex(best_key) ..
+         " — " .. int_to_str(pct) .. "% printable after decode")
+
+    -- Show the first 64 decoded bytes as a string
+    let decoded: str = ""
+    let k: i64 = 0
+    while k < 64 and k < sample_len do
+      let b = mem_read_u8(ptr_add(buf, k)) ^ best_key
+      if b >= 32 and b < 127 do
+        decoded = decoded .. char_from(b)
+      else
+        decoded = decoded .. "."
+      end
+      k += 1
+    end
+    info("decoded preview", decoded)
+  else
+    info("XOR sweep", "no dominant single-byte key found (score " ..
+         int_to_str(pct) .. "%) — try multi-byte or no XOR layer")
+  end
+end
+
+-- ── Entry point ───────────────────────────────────────────────────────────────
+
+fn main()
+  print("╔═══════════════════════════════════════════════════════╗")
+  print("║  Volta Binary Triage — stage-1 pre-Ghidra analysis   ║")
+  print("╚═══════════════════════════════════════════════════════╝")
+
+  if arg_count() < 2 do
+    print("\nUsage: volta bin_triage.vlt <path/to/target.exe>\n")
+    return
+  end
+
+  let path = arg_get(1)
+  let sz   = file_size(path)
+
+  let buf = check_format(path)
+  if buf == nil do return end
+
+  check_pe_headers(buf)
+  check_elf_headers(buf)
+  check_entropy(buf, sz)
+  check_strings(buf, sz)
+  check_patterns(buf, sz)
+  check_xor(buf, sz)
+
+  free(buf)
+
+  print("\n[ ] Triage complete. Open in Ghidra if anything above flagged.")
+end
+
+main()
