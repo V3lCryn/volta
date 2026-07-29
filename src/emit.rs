@@ -66,6 +66,8 @@ impl Emitter {
     }
 
     pub fn emit_program(mut self, prog: &Program) -> Result<String, EmitError> {
+        self.line("#define _POSIX_C_SOURCE 200809L");
+        self.line("#define _DEFAULT_SOURCE");
         self.line("#include <stdio.h>");
         self.line("#include <stdint.h>");
         self.line("#include <string.h>");
