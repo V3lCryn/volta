@@ -109,7 +109,7 @@ end
 -- ── Section 2: PE header walk ────────────────────────────────────────────────
 
 fn check_pe_headers(buf: ptr)
-  if !pe_is_valid(buf) do return end
+  if not pe_is_valid(buf) do return end
 
   banner("2. PE header")
 
@@ -138,7 +138,7 @@ end
 -- ── Section 3: ELF header walk ───────────────────────────────────────────────
 
 fn check_elf_headers(buf: ptr)
-  if !elf_is_valid(buf) do return end
+  if not elf_is_valid(buf) do return end
 
   banner("2. ELF header")
   info("arch",        elf_arch_name(buf))
