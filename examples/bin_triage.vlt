@@ -301,33 +301,22 @@ fn check_xor(buf: ptr, sz: i64)
 end
 
 -- ── Entry point ───────────────────────────────────────────────────────────────
-
-fn main()
-  print("╔═══════════════════════════════════════════════════════╗")
-  print("║  Volta Binary Triage — stage-1 pre-Ghidra analysis   ║")
-  print("╚═══════════════════════════════════════════════════════╝")
-
-  if arg_count() < 2 do
-    print("\nUsage: volta bin_triage.vlt <path/to/target.exe>\n")
-    return
-  end
-
+print("Volta Binary Triage -- stage-1 pre-Ghidra analysis")
+if arg_count() < 2 do
+  print("usage: volta bin_triage.vlt <path/to/target.exe>")
+end
+if arg_count() >= 2 do
   let path = arg_get(1)
   let sz   = file_size(path)
-
   let buf = check_format(path)
-  if buf == nil do return end
-
-  check_pe_headers(buf)
-  check_elf_headers(buf)
-  check_entropy(buf, sz)
-  check_strings(buf, sz)
-  check_patterns(buf, sz)
-  check_xor(buf, sz)
-
-  free(buf)
-
-  print("\n[ ] Triage complete. Open in Ghidra if anything above flagged.")
+  if buf != nil do
+    check_pe_headers(buf)
+    check_elf_headers(buf)
+    check_entropy(buf, sz)
+    check_strings(buf, sz)
+    check_patterns(buf, sz)
+    check_xor(buf, sz)
+    free(buf)
+    print("Triage complete. Open in Ghidra if anything above flagged.")
+  end
 end
-
-main()

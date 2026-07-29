@@ -590,7 +590,8 @@ impl Checker {
                        && ret_ty != *expected {
                         let ok = matches!((expected, &ret_ty),
                             (VType::Float, VType::Int) | (VType::Int, VType::Float) |
-                            (VType::Result, _) | (_, VType::Result));
+                            (VType::Result, _) | (_, VType::Result) |
+                            (VType::Ptr, VType::Nil) | (VType::Nil, VType::Ptr));
                         if !ok {
                             self.errors.push(SemaError::new(
                                 format!("return type mismatch: expected '{}', got '{}'",
@@ -629,7 +630,7 @@ impl Checker {
                         MatchPattern::Integer(_) | MatchPattern::Range { .. } => {
                             if !matches!(match_ty, VType::Int | VType::Unknown) {
                                 self.warnings.push(SemaError::new(
-                                    format!("integer pattern used in match on '{}'", match_ty),
+                                    format!("integer pattern used in match on '{:?}'", match_ty),
                                     *line, "match subject should be an integer type",
                                 ));
                             }
@@ -637,7 +638,7 @@ impl Checker {
                         MatchPattern::Str(_) => {
                             if !matches!(match_ty, VType::Str | VType::Unknown) {
                                 self.warnings.push(SemaError::new(
-                                    format!("string pattern used in match on '{}'", match_ty),
+                                    format!("string pattern used in match on '{:?}'", match_ty),
                                     *line, "match subject should be a string",
                                 ));
                             }
@@ -645,7 +646,7 @@ impl Checker {
                         MatchPattern::Bool(_) => {
                             if !matches!(match_ty, VType::Bool | VType::Unknown) {
                                 self.warnings.push(SemaError::new(
-                                    format!("bool pattern used in match on '{}'", match_ty),
+                                    format!("bool pattern used in match on '{:?}'", match_ty),
                                     *line, "match subject should be a bool",
                                 ));
                             }
