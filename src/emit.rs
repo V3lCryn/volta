@@ -66,6 +66,9 @@ impl Emitter {
     }
 
     pub fn emit_program(mut self, prog: &Program) -> Result<String, EmitError> {
+        // Linux glibc requires these before any system headers to expose POSIX/GNU APIs
+        self.line("#define _POSIX_C_SOURCE 200809L");
+        self.line("#define _DEFAULT_SOURCE 1");
         self.line("#include <stdio.h>");
         self.line("#include <stdint.h>");
         self.line("#include <string.h>");
