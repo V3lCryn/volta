@@ -17,3 +17,4 @@ examples/pg_test.vlt
 examples/pg_test
 fix_pg.py
 auth_server
+examples/bin_triage
