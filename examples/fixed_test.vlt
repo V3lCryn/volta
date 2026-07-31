@@ -1,0 +1,23 @@
+import "fixed"
+
+print("Fixed-Point Math Test")
+print("=====================")
+
+let a = fx_from_int(10)
+let b = fx_from_float(3.5)
+
+print("a = " .. fx_to_str(a))
+print("b = " .. fx_to_str(b))
+print("a + b = " .. fx_to_str(fx_add(a, b)))
+print("a - b = " .. fx_to_str(fx_sub(a, b)))
+print("a * b = " .. fx_to_str(fx_mul(a, b)))
+print("a / b = " .. fx_to_str(fx_div(a, b)))
+
+let pi = fx_from_float(3.14159)
+print("pi = " .. fx_to_str(pi))
+
+let clamped = fx_clamp(fx_from_int(15), fx_from_int(0), fx_from_int(10))
+print("clamp(15, 0, 10) = " .. fx_to_str(clamped))
+
+let lerped = fx_lerp(fx_from_int(0), fx_from_int(100), fx_from_float(0.25))
+print("lerp(0, 100, 0.25) = " .. fx_to_str(lerped))
