@@ -1,24 +1,25 @@
--- bin_triage.vlt — Stage-1 binary triage tool
+-- bin_triage.vlt -- Stage-1 binary triage tool
 --
 -- Usage:  volta bin_triage.vlt <target.exe>
 --
 -- Runs the following checks in order:
 --   1. File size + format detection (PE / ELF / unknown)
 --   2. PE header walk: machine, sections, entry point, image base
---   3. Entropy scan — flag packed / encrypted sections
---   4. String extraction — printable runs ≥ 6 bytes
---   5. Interesting string filter — DLL names, URLs, registry keys, IPs
---   6. Byte pattern hunts — known shellcode stubs, packers, magic bytes
+--   3. Entropy scan -- flag packed / encrypted sections
+--   4. String extraction -- printable runs >= 6 bytes
+--   5. Interesting string filter -- DLL names, URLs, registry keys, IPs
+--   6. Byte pattern hunts -- known shellcode stubs, packers, magic bytes
 --   7. XOR decode attempt on first 256 bytes (common obfuscation layer)
 --
--- Output is plain text — pipe it to a file or grep as needed.
+-- Output is plain text -- pipe it to a file or grep as needed.
 
 -- ── Helpers ──────────────────────────────────────────────────────────────────
 
 fn banner(title: str)
-  print("\n╔══════════════════════════════════════════════════════════════╗")
-  print("║  " .. title)
-  print("╚══════════════════════════════════════════════════════════════╝")
+  print("")
+  print("=================================================================")
+  print("  " .. title)
+  print("=================================================================")
 end
 
 fn flag(label: str, value: str)
@@ -99,7 +100,7 @@ fn check_format(path: str) -> ptr
     elseif magic4 == 0xFEEDFACE or magic4 == 0xCEFAEDFE do
       info("format", "Mach-O (macOS / iOS)")
     else
-      flag("format", "UNKNOWN — check magic bytes: 0x" .. hex(magic4))
+      flag("format", "UNKNOWN -- check magic bytes: 0x" .. hex(magic4))
     end
   end
 
@@ -128,10 +129,10 @@ fn check_pe_headers(buf: ptr)
 
   -- Sanity checks
   if ep == 0 do
-    flag("entry point", "zero — possibly a DLL with no entry, or packed")
+    flag("entry point", "zero -- possibly a DLL with no entry, or packed")
   end
   if nsect > 20 do
-    flag("section count", int_to_str(nsect) .. " — unusually high")
+    flag("section count", int_to_str(nsect) .. " -- unusually high")
   end
 end
 
@@ -155,27 +156,27 @@ fn check_entropy(buf: ptr, sz: i64)
   let e_str = float_to_str(e)
 
   if e > 7.0 do
-    flag("whole-file entropy", e_str .. " — " .. label)
+    flag("whole-file entropy", e_str .. " -- " .. label)
   else
-    info("whole-file entropy", e_str .. " — " .. label)
+    info("whole-file entropy", e_str .. " -- " .. label)
   end
 
-  -- Sample the first 4 KB separately — high entropy here is especially suspicious
+  -- Sample the first 4 KB separately -- high entropy here is especially suspicious
   let head_sz = sz
   if head_sz > 4096 do head_sz = 4096 end
   let head_e = buf_entropy(buf, head_sz)
   let head_label = entropy_label(head_e)
   if head_e > 7.0 do
-    flag("first-4KB entropy", float_to_str(head_e) .. " — " .. head_label)
+    flag("first-4KB entropy", float_to_str(head_e) .. " -- " .. head_label)
   else
-    info("first-4KB entropy", float_to_str(head_e) .. " — " .. head_label)
+    info("first-4KB entropy", float_to_str(head_e) .. " -- " .. head_label)
   end
 end
 
 -- ── Section 5: string extraction ─────────────────────────────────────────────
 
 fn check_strings(buf: ptr, sz: i64)
-  banner("4. String artifacts (≥6 chars)")
+  banner("4. String artifacts (>=6 chars)")
 
   let all_strs = strings_extract(buf, sz, 6)
   let total    = arr_len(all_strs)
@@ -194,7 +195,7 @@ fn check_strings(buf: ptr, sz: i64)
   end
 
   if hits == 0 do
-    info("interesting strings", "none found — binary may be packed or stripped")
+    info("interesting strings", "none found -- binary may be packed or stripped")
   end
 end
 
@@ -232,7 +233,7 @@ fn check_patterns(buf: ptr, sz: i64)
   -- Common crypto constants: AES S-box start (63 7c 77 7b)
   let aes_off = mem_scan(buf, sz, "637c777b")
   if aes_off >= 0 do
-    flag("AES S-box constant", "offset 0x" .. hex(aes_off) .. " — AES likely in use")
+    flag("AES S-box constant", "offset 0x" .. hex(aes_off) .. " -- AES likely in use")
   end
 
   -- PowerShell download cradle signature
@@ -278,8 +279,8 @@ fn check_xor(buf: ptr, sz: i64)
 
   let pct = (best_score * 100) / sample_len
   if pct > 70 do
-    flag("XOR key candidate", "0x" .. hex(best_key) ..
-         " — " .. int_to_str(pct) .. "% printable after decode")
+    flag("XOR key candidate", hex(best_key) ..
+         " -- " .. int_to_str(pct) .. "% printable after decode")
 
     -- Show the first 64 decoded bytes as a string
     let decoded: str = ""
@@ -296,7 +297,7 @@ fn check_xor(buf: ptr, sz: i64)
     info("decoded preview", decoded)
   else
     info("XOR sweep", "no dominant single-byte key found (score " ..
-         int_to_str(pct) .. "%) — try multi-byte or no XOR layer")
+         int_to_str(pct) .. "%) -- try multi-byte or no XOR layer")
   end
 end
 
