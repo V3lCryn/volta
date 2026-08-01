@@ -1,15 +1,15 @@
--- anthem_bionics.vlt — Demonstration of Volta's bionic hardware features
+-- anthem_bionics.vlt -- Demonstration of Volta's bionic hardware features
 --
 -- Simulates the signal processing pipeline for a prosthetic limb controller:
 --   • EMG (electromyography) sensor sampling via ring buffer
---   • Real-time EMA filter → intent classification → servo mapping
+--   • Real-time EMA filter -> intent classification -> servo mapping
 --   • Entropy-based artifact rejection (sudden noise bursts)
 --   • Cardiac monitor: R-peak detection from simulated ADC stream
 --   • @critical block for atomic sensor reads
 --   • @interrupt fn stub for ADC ISR pattern
 --   • Precision timing with ticks() for loop-rate enforcement
 --
--- This is a simulation — I/O uses print() instead of hardware registers.
+-- This is a simulation -- I/O uses print() instead of hardware registers.
 -- In a real Anthem build, replace the ADC reads with @device register access.
 
 -- ── Hardware register map (ARM Cortex-M4 style) ───────────────────────────────
@@ -65,7 +65,7 @@ end
 fn emg_artifact(ring: VRing) -> bool
   if ring_len(ring) < 16 do return false end
   -- Build a tiny string-slice of recent samples to feed entropy()
-  -- (entropy works on byte distributions — we use 8-bit slices of sample)
+  -- (entropy works on byte distributions -- we use 8-bit slices of sample)
   let acc: str = ""
   let i: i64 = 0
   while i < 16 do
@@ -74,7 +74,7 @@ fn emg_artifact(ring: VRing) -> bool
     i += 1
   end
   let e = entropy(acc)
-  return e > 7.2    -- near-maximum entropy → white noise → artifact
+  return e > 7.2    -- near-maximum entropy -> white noise -> artifact
 end
 
 fn run_emg_pipeline() -> i64
@@ -113,7 +113,7 @@ fn run_emg_pipeline() -> i64
     if t % 50 == 0 do
       let artifact = emg_artifact(ring)
       if artifact do
-        print("[EMG] t=" .. int_to_str(t) .. "ms  ARTIFACT — discarding window")
+        print("[EMG] t=" .. int_to_str(t) .. "ms  ARTIFACT -- discarding window")
       else
         score = emg_classify(ring, baseline)
         let ema_str = float_to_str(ema_val)
@@ -129,13 +129,13 @@ end
 
 -- ── Servo / motor control ──────────────────────────────────────────────────────
 
--- Map EMG score (0-100) to servo PWM pulse width (1000-2000 µs, 1500 µs = neutral)
+-- Map EMG score (0-100) to servo PWM pulse width (1000-2000 us, 1500 us = neutral)
 fn score_to_pwm(score: i64, grip: bool) -> i64
   if grip do
-    -- Closing: drive from 1500µs (neutral) to 2000µs (full close)
+    -- Closing: drive from 1500us (neutral) to 2000us (full close)
     return clamp_i(map_range(score as f64, 0.0, 100.0, 1500.0, 2000.0) as i64, 1500, 2000)
   else
-    -- Extending: drive from 1500µs (neutral) to 1000µs (full open)
+    -- Extending: drive from 1500us (neutral) to 1000us (full open)
     return clamp_i(map_range(score as f64, 0.0, 100.0, 1500.0, 1000.0) as i64, 1000, 1500)
   end
 end
@@ -148,8 +148,8 @@ fn run_servo_demo(score: i64)
     let pw_extend = score_to_pwm(i, false)
     if i % 20 == 0 do
       print("  score=" .. int_to_str(i) ..
-            "  grip_pw=" .. int_to_str(pw_close) .. "µs" ..
-            "  extend_pw=" .. int_to_str(pw_extend) .. "µs")
+            "  grip_pw=" .. int_to_str(pw_close) .. "us" ..
+            "  extend_pw=" .. int_to_str(pw_extend) .. "us")
     end
     i += 1
   end
@@ -181,7 +181,7 @@ fn ecg_detect_rate(ring: VRing, sample_rate: i64) -> i64
   let npks = arr_len(peaks)
   if npks < 2 do return 0 end
 
-  -- Average RR interval → BPM
+  -- Average RR interval -> BPM
   let rr_sum: i64 = 0
   let pi: i64 = 1
   while pi < npks do
@@ -194,7 +194,7 @@ fn ecg_detect_rate(ring: VRing, sample_rate: i64) -> i64
 end
 
 fn run_cardiac_monitor()
-  print("\n[ECG] Cardiac monitor — simulating 10s of ECG @ " .. int_to_str(ECG_SAMPLE_RATE) .. "Hz")
+  print("\n[ECG] Cardiac monitor -- simulating 10s of ECG @ " .. int_to_str(ECG_SAMPLE_RATE) .. "Hz")
   let ring: VRing = ring_new(ECG_BUF_SIZE)
   let baseline = 2048
   let bpm_prev: i64 = 0
@@ -202,7 +202,7 @@ fn run_cardiac_monitor()
   let samples = ECG_SAMPLE_RATE * 10
 
   while t < samples do
-    -- Simulate ~72 BPM (R-R interval ≈ 694ms = 347 samples at 500Hz)
+    -- Simulate ~72 BPM (R-R interval ~= 694ms = 347 samples at 500Hz)
     -- Simple triangular R-peak model
     let phase = t % 347
     let raw: i64 = baseline
@@ -249,10 +249,10 @@ fn run_dsp_demo()
   print("  clamp_i(2500, 1000, 2000) = " .. int_to_str(clamp_i(2500, 1000, 2000)))
   print("  clamp_f(3.7,  0.0, 1.0)  = " .. float_to_str(clamp_f(3.7, 0.0, 1.0)))
 
-  -- map_range: ADC 0-4095 → physical force 0.0-10.0 N
+  -- map_range: ADC 0-4095 -> physical force 0.0-10.0 N
   let adc: i64 = 3000
   let force = map_range(adc as f64, 0.0, 4095.0, 0.0, 10.0)
-  print("  ADC " .. int_to_str(adc) .. " → " .. float_to_str(force) .. " N")
+  print("  ADC " .. int_to_str(adc) .. " -> " .. float_to_str(force) .. " N")
 
   -- median3: noise-robust sample
   let m = median3(1840, 2100, 1960)
@@ -271,7 +271,7 @@ fn run_timing_demo()
   sleep_us(5000)          -- 5ms
   let t1 = ticks()
   let elapsed_us = (t1 - t0) / 1000
-  print("  sleep_us(5000) → actual elapsed ≈ " .. int_to_str(elapsed_us) .. " µs")
+  print("  sleep_us(5000) -> actual elapsed ~= " .. int_to_str(elapsed_us) .. " us")
 
   -- Measure loop rate
   let loop_t0 = ticks()
@@ -296,24 +296,16 @@ end
 --
 -- Volta emits: __attribute__((interrupt)) void ADC1_IRQHandler(void) { ... }
 -- Zero overhead, same binary as hand-written C. No RTOS required.
-
 -- ── Entry point ───────────────────────────────────────────────────────────────
-
-fn main()
-  print("╔═══════════════════════════════════════════════════════╗")
-  print("║  Anthem Bionics — Volta Signal Processing Demo        ║")
-  print("╚═══════════════════════════════════════════════════════╝")
-  print("")
-
-  let final_score = run_emg_pipeline()
-  print("\n[EMG] Final contraction score: " .. int_to_str(final_score))
-
-  run_servo_demo(final_score)
-  run_cardiac_monitor()
-  run_dsp_demo()
-  run_timing_demo()
-
-  print("\n[OK] All systems nominal.")
-end
-
-main()
+print("Anthem Bionics -- Volta Signal Processing Demo")
+print("================================================")
+print("")
+let final_score = run_emg_pipeline()
+print("")
+print("[EMG] Final contraction score: " .. int_to_str(final_score))
+run_servo_demo(final_score)
+run_cardiac_monitor()
+run_dsp_demo()
+run_timing_demo()
+print("")
+print("[OK] All systems nominal.")
