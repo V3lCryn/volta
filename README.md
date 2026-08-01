@@ -492,6 +492,40 @@ pg_close()
 
 ---
 
+## Bionics and embedded — the flagship example
+
+`examples/anthem_bionics.vlt` simulates a real signal-processing
+pipeline for a prosthetic limb controller, built entirely from Volta's
+signal processing primitives:
+
+- EMG (electromyography) sensor sampling via a ring buffer
+- Real-time low-pass filtering with a physically meaningful cutoff
+  frequency (not a hand-picked constant) -> contraction scoring ->
+  servo PWM mapping for a prosthetic hand's grip
+- Cardiac monitor: R-peak detection from a simulated ADC stream,
+  producing accurate real-time BPM
+- @critical block for atomic sensor reads
+- @interrupt fn stub for a real ADC interrupt service routine pattern
+- Hardware register map comments showing exactly what the real
+  @device block would look like on actual ARM Cortex-M4 silicon
+
+volta examples/anthem_bionics.vlt
+
+[EMG] t=1050ms  score=100  ema=931.764
+[EMG] Peak contraction score: 100
+[SERVO] Mapping EMG score to prosthetic hand position:
+  score=100  grip_pw=2000us  extend_pw=1000us
+[ECG] Cardiac monitor -- simulating 10s of ECG @ 500Hz
+  t=1s  bpm=86
+  t=9s  bpm=86
+
+This is currently a simulation -- I/O uses print() where a real
+build would use @device register access. Getting Volta to run this
+kind of pipeline on real embedded hardware is the current top-priority
+milestone. See MISSION.md for why this matters.
+
+---
+
 ## Example — TCP echo server
 
 ```lua
