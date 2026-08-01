@@ -1,0 +1,73 @@
+-- lib/filters.vlt -- reusable signal filters built on Volta's DSP primitives
+--
+-- These wrap the built-in ema(), clamp_i(), clamp_f(), median3() and
+-- lpf_alpha() primitives into ready-to-use filter functions for common
+-- signal processing patterns -- the kind of thing an EMG, ECG, or
+-- pressure sensor pipeline reaches for constantly.
+
+-- Simple moving average over the last N samples in a ring buffer.
+-- Good general-purpose smoothing filter -- easy to reason about,
+-- but reacts slower to sudden changes than an EMA filter does.
+fn moving_average(ring: VRing) -> i64
+  let n = ring_len(ring)
+  if n == 0 do return 0 end
+  return rb_avg_helper(ring, n)
+end
+
+fn rb_avg_helper(ring: VRing, n: i64) -> i64
+  let total: i64 = 0
+  let i: i64 = 0
+  while i < n do
+    total = total + ring_peek(ring, i)
+    i = i + 1
+  end
+  return total / n
+end
+
+-- One-step exponential moving average filter, wrapped for readability.
+-- Reacts faster to real changes than a plain moving average, at the
+-- cost of some jitter from noise. 'alpha' closer to 1.0 reacts faster
+-- and smooths less; closer to 0.0 smooths more and reacts slower.
+fn ema_step(prev: f64, sample: f64, alpha: f64) -> f64
+  return ema(prev, sample, alpha)
+end
+
+-- Simple threshold-crossing detector -- returns true the instant a
+-- signal crosses above a threshold it was previously below.
+-- Useful for detecting the rising edge of a contraction, heartbeat,
+-- or any other burst-like signal.
+fn crossed_above(prev_value: i64, curr_value: i64, threshold: i64) -> bool
+  if prev_value < threshold do
+    if curr_value >= threshold do
+      return true
+    end
+  end
+  return false
+end
+
+-- Debounce helper -- requires a signal to stay above threshold for
+-- 'min_samples' consecutive readings before considering it a genuine
+-- event, rejecting single-sample noise spikes.
+fn debounce_above(ring: VRing, threshold: i64, min_samples: i64) -> bool
+  let n = ring_len(ring)
+  if n < min_samples do return false end
+  let i: i64 = 0
+  while i < min_samples do
+    if ring_peek(ring, i) < threshold do
+      return false
+    end
+    i = i + 1
+  end
+  return true
+end
+
+-- 3-point median filter over the most recent 3 ring buffer samples --
+-- excellent for rejecting single-sample spike noise (a common ADC
+-- glitch) without the lag a moving average filter introduces.
+fn median_filter3(ring: VRing) -> i64
+  if ring_len(ring) < 3 do return ring_peek(ring, 0) end
+  let a = ring_peek(ring, 0)
+  let b = ring_peek(ring, 1)
+  let c = ring_peek(ring, 2)
+  return median3(a, b, c)
+end

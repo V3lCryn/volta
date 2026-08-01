@@ -1,0 +1,47 @@
+import "filters"
+
+print("Signal Filters Test")
+print("====================")
+print("")
+
+let ring: VRing = ring_new(10)
+
+-- Push a noisy-looking signal: mostly around 100, with a spike and a dip
+let samples: [i64] = [98, 102, 99, 250, 101, 97, 15, 100, 103, 99]
+
+print("Raw samples: ")
+let i: i64 = 0
+while i < arr_len(samples) do
+  ring_push(ring, samples[i])
+  i = i + 1
+end
+
+let j: i64 = 0
+while j < arr_len(samples) do
+  print("  " .. int_to_str(samples[j]))
+  j = j + 1
+end
+
+print("")
+print("moving_average(ring): " .. int_to_str(moving_average(ring)))
+print("median_filter3(ring) (last 3 samples: 100, 103, 99): " .. int_to_str(median_filter3(ring)))
+print("")
+
+-- EMA filter over the same sequence
+print("EMA filter walk (alpha=0.3):")
+let ema_val: f64 = 0.0
+let k: i64 = 0
+while k < arr_len(samples) do
+  ema_val = ema_step(ema_val, samples[k] as f64, 0.3)
+  print("  sample=" .. int_to_str(samples[k]) .. "  ema=" .. float_to_str(ema_val))
+  k = k + 1
+end
+
+print("")
+print("Threshold crossing test:")
+print("  crossed_above(90, 250, 150): " .. bool_to_str(crossed_above(90, 250, 150)))
+print("  crossed_above(200, 250, 150): " .. bool_to_str(crossed_above(200, 250, 150)))
+
+print("")
+print("Debounce test (threshold=95, need 3 consecutive):")
+print("  debounce_above(ring, 95, 3): " .. bool_to_str(debounce_above(ring, 95, 3)))
