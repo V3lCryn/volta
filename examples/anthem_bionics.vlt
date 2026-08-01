@@ -86,6 +86,7 @@ fn run_emg_pipeline() -> i64
   let ema_val:   f64 = 0.0
   let alpha:     f64 = 0.05    -- slow filter: ~20-sample time constant
   let score:     i64 = 0
+  let peak_score: i64 = 0
   let samples = EMG_SAMPLE_RATE * 2
   let t: i64 = 0
   while t < samples do
@@ -116,6 +117,9 @@ fn run_emg_pipeline() -> i64
         print("[EMG] t=" .. int_to_str(t) .. "ms  ARTIFACT -- discarding window")
       else
         score = emg_classify(ring, baseline)
+        if score > peak_score do
+          peak_score = score
+        end
         let ema_str = float_to_str(ema_val)
         print("[EMG] t=" .. int_to_str(t) .. "ms  score=" .. int_to_str(score) .. "  ema=" .. ema_str)
       end
@@ -124,7 +128,7 @@ fn run_emg_pipeline() -> i64
   end
 
   ring_free(ring)
-  return score
+  return peak_score
 end
 
 -- ── Servo / motor control ──────────────────────────────────────────────────────
@@ -302,7 +306,7 @@ print("================================================")
 print("")
 let final_score = run_emg_pipeline()
 print("")
-print("[EMG] Final contraction score: " .. int_to_str(final_score))
+print("[EMG] Peak contraction score: " .. int_to_str(final_score))
 run_servo_demo(final_score)
 run_cardiac_monitor()
 run_dsp_demo()
