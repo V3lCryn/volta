@@ -1,3 +1,5 @@
+import "filters"
+
 -- anthem_bionics.vlt -- Demonstration of Volta's bionic hardware features
 --
 -- Simulates the signal processing pipeline for a prosthetic limb controller:
@@ -46,17 +48,7 @@ end
 -- Returns a score 0-100 (higher = stronger contraction signal).
 fn emg_classify(ring: VRing, baseline: i64) -> i64
   if ring_empty(ring) do return 0 end
-  let sum:  i64 = 0
-  let count = ring_len(ring)
-  let i: i64 = 0
-  while i < count do
-    let sample = ring_peek(ring, i)
-    let diff   = sample - baseline
-    if diff < 0 do diff = 0 - diff end   -- abs
-    sum += diff
-    i += 1
-  end
-  let mean = sum / count
+  let mean = mean_abs_deviation(ring, baseline)
   -- Map mean deviation to 0-100 score
   return clamp_i(map_range(mean as f64, 0.0, 800.0, 0.0, 100.0) as i64, 0, 100)
 end

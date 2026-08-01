@@ -71,3 +71,24 @@ fn median_filter3(ring: VRing) -> i64
   let c = ring_peek(ring, 2)
   return median3(a, b, c)
 end
+
+-- Mean absolute deviation from a baseline value across a ring buffer.
+-- Useful for turning a noisy raw signal into "how far from resting
+-- state is this, on average" -- the core building block behind most
+-- muscle/pressure contraction scoring.
+fn mean_abs_deviation(ring: VRing, baseline: i64) -> i64
+  if ring_empty(ring) do return 0 end
+  let sum: i64 = 0
+  let count = ring_len(ring)
+  let i: i64 = 0
+  while i < count do
+    let sample = ring_peek(ring, i)
+    let diff = sample - baseline
+    if diff < 0 do
+      diff = 0 - diff
+    end
+    sum = sum + diff
+    i = i + 1
+  end
+  return sum / count
+end
