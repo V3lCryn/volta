@@ -46,3 +46,49 @@ calls it to actually merge the imported module's AST into the caller's).
 **Status:** open, not yet fixed. Workaround in use.
 
 ---
+
+## Ring buffer size must exceed the signal period it needs to capture
+
+**Found:** while testing examples/anthem_bionics.vlt's ECG/cardiac monitor
+
+**Symptom:** R-peak heart rate detection permanently returned bpm=0,
+even though the EMG side of the same file worked correctly.
+
+**Root cause:** the ring buffer (ECG_BUF_SIZE) was sized at 128 samples,
+but the simulated heartbeat's R-R interval was 347 samples apart at the
+chosen sample rate. Since the ring buffer only ever holds its most
+recent N samples, it physically could not hold two heartbeats at once --
+by the time the second beat arrived, the first had already been pushed
+out and forgotten. The peak detector correctly found at most one peak
+per window, and two peaks are required to compute an interval, so
+bpm=0 forever, silently, with no error of any kind.
+
+**Why this is a genuinely serious class of bug:** this is not a syntax
+or type error -- the code compiled and ran without complaint. It is a
+systems-level sizing mistake: a buffer sized without checking it against
+the actual period of the real-world signal it needs to capture. In a
+real embedded cardiac monitor, this exact mistake would silently report
+"no heartbeat detected" forever -- one of the worst possible silent
+failure modes a medical device could have.
+
+**Fix:** ECG_BUF_SIZE increased from 128 to 1024, comfortably holding
+several full heartbeat cycles.
+
+**Lesson for future stdlib/example work:** whenever a ring buffer (or
+any fixed-size buffer) is used to detect a periodic signal, always
+explicitly size it to comfortably exceed the expected period of that
+signal, and say so in a comment next to the buffer's declaration.
+
+**Status:** fixed in examples/anthem_bionics.vlt (see commit history).
+
+---
+
+## Module-level import gap -- practical workaround pattern
+
+Following on from the entry above: until the module-level let/const
+import visibility gap is properly fixed, any new lib/ module should
+follow the pattern used in lib/fixed.vlt -- inline literal values
+directly inside each function body rather than referencing a shared
+module-level constant, with a comment at the top of the file noting why.
+
+---
