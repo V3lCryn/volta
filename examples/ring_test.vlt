@@ -1,0 +1,34 @@
+print("VRing Test -- built-in ring buffer type")
+print("========================================")
+
+let capacity: i64 = 5
+let ring: VRing = ring_new(capacity)
+
+print("capacity: " .. int_to_str(capacity))
+print("empty at start: " .. bool_to_str(ring_empty(ring)))
+print("")
+
+print("Pushing 10, 20, 30, 40, 50 (fills exactly)")
+ring_push(ring, 10)
+ring_push(ring, 20)
+ring_push(ring, 30)
+ring_push(ring, 40)
+ring_push(ring, 50)
+
+print("len: " .. int_to_str(ring_len(ring)))
+print("full: " .. bool_to_str(ring_full(ring)))
+print("oldest (peek 0): " .. int_to_str(ring_peek(ring, 0)))
+print("newest (peek 4): " .. int_to_str(ring_peek(ring, 4)))
+print("")
+
+print("Pushing 60, 70 -- should overwrite oldest values (10, 20)")
+ring_push(ring, 60)
+ring_push(ring, 70)
+
+print("len (should stay at capacity): " .. int_to_str(ring_len(ring)))
+print("oldest now (peek 0, should be 30): " .. int_to_str(ring_peek(ring, 0)))
+print("newest now (peek 4, should be 70): " .. int_to_str(ring_peek(ring, 4)))
+
+ring_free(ring)
+print("")
+print("done -- ring freed")
