@@ -28,7 +28,7 @@ const EMG_SAMPLE_RATE: i64  = 1000    -- Hz
 const EMG_BUF_SIZE:    i64  = 256     -- must be power of 2 for ring
 const EMG_THRESHOLD:   i64  = 512     -- raw ADC units above baseline
 const ECG_SAMPLE_RATE: i64  = 500
-const ECG_BUF_SIZE:    i64  = 128
+const ECG_BUF_SIZE:    i64  = 1024
 
 -- ── Packed struct: status flags sent to controller MCU ───────────────────────
 
