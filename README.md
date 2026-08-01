@@ -2,6 +2,10 @@
 
 A fast, low-level scripting language that compiles to C. Clean Lua-like syntax, native performance, zero runtime dependencies — built for people who work close to the metal.
 
+**Volta exists to close the gap between domain expertise and hardware access** — so a biomedical engineer who understands nerve signals, or a security researcher who understands a binary format, doesn't need years of C mastery before they can express that understanding in real, working code that actually touches real hardware.
+
+See [MISSION.md](MISSION.md) for why this project exists, and [ARCHITECTURE.md](ARCHITECTURE.md) for real engineering decisions and their reasoning, including the current C-emission pipeline and the committed path toward native code generation.
+
 ```lua
 print("Hello, World!")
 ```
@@ -419,6 +423,73 @@ GPIO_ODR   = 0xFF
 | `hash_str(s)` | djb2 hash |
 | `entropy(s)` | Shannon entropy (0.0 – 8.0) |
 
+### Signal processing (`lib/fixed.vlt`, `lib/filters.vlt`)
+
+Built specifically for real-time embedded and bionic signal processing —
+sensor sampling, filtering, and control loops on hardware that may not
+even have a floating-point unit.
+
+```lua
+import "fixed"
+import "filters"
+
+-- Fixed-point math (Q16.16) — pure integer arithmetic, no FPU required
+let a = fx_from_int(10)
+let b = fx_from_float(3.5)
+print(fx_to_str(fx_mul(a, b)))   -- 35.00000
+
+-- Ring buffer for streaming sensor samples
+let ring: VRing = ring_new(256)
+ring_push(ring, raw_sample)
+
+-- Composable filters built on top of Volta's DSP primitives
+let smoothed = moving_average(ring)
+let filtered = lowpass_filter(prev, sample, 10.0, 1000.0)  -- 10Hz cutoff @ 1kHz sample rate
+let is_event = debounce_above(ring, threshold, 3)           -- reject single-sample noise
+```
+
+See `examples/anthem_bionics.vlt` for a full simulated EMG/ECG signal
+pipeline — contraction scoring, servo mapping, R-peak heart rate
+detection — built entirely from these primitives.
+
+### Binary analysis / memory inspection
+
+Low-level primitives for reverse engineering, security research, and
+hardware register inspection.
+
+| Function | Description |
+|----------|-------------|
+| `file_read_bin(path)` | Binary-safe file read, returns raw pointer |
+| `buf_entropy(buf, len)` | Shannon entropy on raw bytes (handles nulls) |
+| `strings_extract(buf, len, min_len)` | Extract printable ASCII runs from a binary buffer |
+| `buf_find_str(buf, len, pattern)` | Search for a byte pattern in a binary buffer |
+| `pe_is_valid(buf)` / `elf_is_valid(buf)` | Detect PE / ELF executable format |
+| `pe_entry_point(buf)` / `elf_entry_point(buf)` | Read entry point address from header |
+| `elf_arch_name(buf)` | Human-readable architecture string |
+| `mem_dump(ptr, len)` | Hex + ASCII memory dump with address labels |
+| `mem_scan(ptr, len, pattern)` | Hex-pattern search in memory |
+| `mem_diff(a, b, len)` | Byte-level diff between two memory regions |
+| `ptr_add(p, n)` / `ptr_to_int(p)` / `int_to_ptr(n)` | Pointer arithmetic |
+
+See `examples/bin_triage.vlt` for a full stage-1 binary triage tool —
+format detection, header parsing, entropy scanning, string extraction,
+and XOR obfuscation detection, designed to run before opening a
+disassembler.
+
+### PostgreSQL
+
+```lua
+let ok = pg_connect(connstr)
+let rows = pg_query("SELECT username FROM users WHERE active = true")
+let i: i64 = 0
+while i < rows do
+  print(pg_value(i, 0))
+  i += 1
+end
+pg_free()
+pg_close()
+```
+
 ---
 
 ## Example — TCP echo server
@@ -482,20 +553,41 @@ map_free(counts)
 - **Compiles to C** — clang/gcc optimises your code, no GC, no VM, no interpreter overhead
 - **Zero dependencies** — output binary links nothing unusual, drop it anywhere
 - **C interop is first class** — `@extern` any C function in two lines
-- **Hardware access built in** — `@device` maps memory-mapped registers by name
-- **Security-aware stdlib** — XOR, entropy, hex dump, hashing built in from day one
+- **Hardware access built in** — `@device` maps memory-mapped registers by name, `@critical`/`@interrupt` for real embedded control flow
+- **Security-aware stdlib** — XOR, entropy, hex dump, hashing, PE/ELF parsing built in from day one
+- **Signal-processing-aware stdlib** — fixed-point math, ring buffers, and composable filters, built for real-time embedded and bionic control loops
+
+Most languages force a choice: readable and safe (Python, Lua) or fast
+and hardware-capable (C). Volta is built specifically to remove that
+choice — not by making hardware programming easy, some of it is
+genuinely hard and always will be, but by removing the friction that
+has nothing to do with the actual problem and everything to do with
+decades-old language design. See [MISSION.md](MISSION.md).
 
 ---
 
 ## Roadmap
 
+**Done:**
+- [x] Module system (`import`)
+- [x] Closures
+- [x] LSP server + VS Code extension
+- [x] Enums, pattern matching (`match`)
+- [x] Result type + error handling
+- [x] Packed structs, pointer types, `@critical` / `@interrupt` hardware primitives
+- [x] Fixed-point arithmetic (`lib/fixed.vlt`) for FPU-less embedded targets
+- [x] Ring buffers (`VRing`), signal filters (`lib/filters.vlt`) — moving average, EMA, low-pass, debounce, median filter
+- [x] Low-level memory inspection API (`mem_dump`, `mem_scan`, `mem_diff`, pointer arithmetic)
+- [x] Binary analysis toolkit — PE/ELF header parsing, entropy analysis, string extraction, XOR key detection
+
+**Not yet:**
 - [ ] Generics / type-safe collections
 - [ ] Interfaces / traits
-- [ ] Module system
-- [ ] Capturing closures
 - [ ] Sorting built-in
 - [ ] REPL
-- [ ] LSP / IDE support
+- [ ] Real hardware validation (currently simulated — see `examples/anthem_bionics.vlt`)
+- [ ] Cross-platform installers (see [ARCHITECTURE.md](ARCHITECTURE.md))
+- [ ] Native code generation via LLVM (committed long-term direction, see [ARCHITECTURE.md](ARCHITECTURE.md))
 
 ---
 
