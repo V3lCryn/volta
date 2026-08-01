@@ -92,3 +92,14 @@ fn mean_abs_deviation(ring: VRing, baseline: i64) -> i64
   end
   return sum / count
 end
+
+-- Proper low-pass filter using a physically meaningful cutoff frequency,
+-- rather than an arbitrary hand-tuned alpha. Wraps ema() + lpf_alpha()
+-- together so callers reason in Hz, not in unitless smoothing constants.
+--
+-- cutoff_hz:    frequencies below this pass through mostly unchanged
+-- sample_rate:  how many samples per second your signal is sampled at
+fn lowpass_filter(prev: f64, sample: f64, cutoff_hz: f64, sample_rate: f64) -> f64
+  let alpha = lpf_alpha(cutoff_hz, sample_rate)
+  return ema(prev, sample, alpha)
+end

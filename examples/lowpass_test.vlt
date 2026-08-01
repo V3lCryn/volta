@@ -1,0 +1,31 @@
+import "filters"
+
+print("Low-pass Filter Test")
+print("=====================")
+print("")
+
+-- Simulate the same kind of noisy signal as the EMG demo:
+-- baseline around 0, with a burst that rises then falls
+let samples: [i64] = [0, 0, 0, 50, 150, 300, 450, 600, 500, 350, 150, 50, 0, 0, 0]
+
+print("Comparing arbitrary alpha=0.05 vs physically-meaningful cutoff=5Hz @ 1kHz sample rate")
+print("")
+
+let filtered_arbitrary: f64 = 0.0
+let filtered_hz: f64 = 0.0
+let sample_rate: f64 = 1000.0
+let cutoff: f64 = 5.0
+
+let i: i64 = 0
+while i < arr_len(samples) do
+  let s = samples[i] as f64
+  filtered_arbitrary = ema_step(filtered_arbitrary, s, 0.05)
+  filtered_hz = lowpass_filter(filtered_hz, s, cutoff, sample_rate)
+  print("  raw=" .. int_to_str(samples[i]) ..
+        "  alpha=0.05 -> " .. float_to_str(filtered_arbitrary) ..
+        "  cutoff=5Hz -> " .. float_to_str(filtered_hz))
+  i = i + 1
+end
+
+print("")
+print("computed alpha for 5Hz cutoff @ 1kHz: " .. float_to_str(lpf_alpha(cutoff, sample_rate)))
