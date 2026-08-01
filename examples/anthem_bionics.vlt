@@ -76,7 +76,7 @@ fn run_emg_pipeline() -> i64
   -- Simulate 2 seconds of sensor data at EMG_SAMPLE_RATE
   let baseline:  i64 = 2048    -- ADC midpoint (12-bit, 3.3V ref, ~1.65V)
   let ema_val:   f64 = 0.0
-  let alpha:     f64 = 0.05    -- slow filter: ~20-sample time constant
+  let cutoff_hz: f64 = 10.0    -- EMG envelope cutoff, physically meaningful (was: arbitrary alpha=0.05)
   let score:     i64 = 0
   let peak_score: i64 = 0
   let samples = EMG_SAMPLE_RATE * 2
@@ -100,7 +100,7 @@ fn run_emg_pipeline() -> i64
     end
 
     -- EMA low-pass filter on raw sample (cast to float)
-    ema_val = ema(ema_val, (raw - baseline) as f64, alpha)
+    ema_val = lowpass_filter(ema_val, (raw - baseline) as f64, cutoff_hz, EMG_SAMPLE_RATE as f64)
 
     -- Every 50ms (every 50 samples at 1kHz) run the classifier
     if t % 50 == 0 do
