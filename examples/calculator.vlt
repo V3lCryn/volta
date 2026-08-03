@@ -1,0 +1,55 @@
+-- calculator.vlt -- ported from Python
+-- A simple menu-driven calculator
+
+fn add(x: f64, y: f64) -> f64
+  return x + y
+end
+
+fn subtract(x: f64, y: f64) -> f64
+  return x - y
+end
+
+fn multiply(x: f64, y: f64) -> f64
+  return x * y
+end
+
+fn divide(x: f64, y: f64) -> f64
+  if y == 0.0 do
+    print("Error! Division by zero.")
+    return 0.0
+  end
+  return x / y
+end
+
+while true do
+  print("")
+  print("1.Add 2.Sub 3.Mul 4.Div 5.Exit")
+  print("Select (1-5): ")
+  let choice = input()
+
+  if str_eq(choice, "5") do
+    break
+  end
+
+  let valid = str_eq(choice, "1")
+  if str_eq(choice, "2") do valid = true end
+  if str_eq(choice, "3") do valid = true end
+  if str_eq(choice, "4") do valid = true end
+
+  if valid do
+    print("N1: ")
+    let n1_str = input()
+    print("N2: ")
+    let n2_str = input()
+    let n1 = to_float(n1_str)
+    let n2 = to_float(n2_str)
+
+    let result: f64 = 0.0
+    if str_eq(choice, "1") do result = add(n1, n2) end
+    if str_eq(choice, "2") do result = subtract(n1, n2) end
+    if str_eq(choice, "3") do result = multiply(n1, n2) end
+    if str_eq(choice, "4") do result = divide(n1, n2) end
+
+    print("Result: {result}")
+  end
+end
