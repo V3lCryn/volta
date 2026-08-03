@@ -43,7 +43,20 @@ themselves currently get carried over. Needs investigation in the
 import resolution logic (src/main.rs, resolve_import and whatever
 calls it to actually merge the imported module's AST into the caller's).
 
-**Status:** open, not yet fixed. Workaround in use.
+**Status:** FIXED. `ast::Stmt::Const` was added to the cross-module
+whitelist in `collect_stmts` (src/main.rs), so module-level `const`
+declarations now correctly cross import boundaries, verified with
+examples/const_import_test.vlt. lib/fixed.vlt has been refactored to
+use real named constants (FX_SHIFT, FX_ONE) instead of the inlined
+magic-number workaround, with identical output confirmed before and
+after the change.
+
+Note: plain `let` at module top-level intentionally still does NOT
+cross the import boundary -- only `const` does. This is correct
+behaviour, not a remaining bug: a mutable module-level `let` with
+potential side effects shouldn't silently execute or leak state just
+because something imports that file. Use `const` for any value meant
+to be shared across modules.
 
 ---
 
