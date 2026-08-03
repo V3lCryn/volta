@@ -403,6 +403,8 @@ impl Emitter {
         self.line(r#"    char*d=_vbuf+_vpos;int64_t pre=p-s,fl=strlen(from),tl=strlen(to);"#);
         self.line(r#"    memcpy(d,s,pre);memcpy(d+pre,to,tl);strcpy(d+pre+tl,p+fl);"#);
         self.line(r#"    int64_t total=pre+tl+strlen(p+fl);_vpos=(_vpos+total+1)%131072;return d;}"#);
+        self.line(r#"static int64_t _vdiv(int64_t a,int64_t b){if(b==0){fprintf(stderr,"volta runtime error: division by zero\n");exit(1);}return a/b;}"#);
+        self.line(r#"static int64_t _vmod(int64_t a,int64_t b){if(b==0){fprintf(stderr,"volta runtime error: modulo by zero\n");exit(1);}return a%b;}"#);
         self.line(r#"static double entropy(const char* s){"#);
         self.line(r#"    int64_t freq[256]={0},len=(int64_t)strlen(s);if(len==0)return 0.0;"#);
         self.line(r#"    for(int64_t i=0;i<len;i++)freq[(unsigned char)s[i]]++;"#);
@@ -509,7 +511,7 @@ impl Emitter {
         self.line(r#"static double map_range(double v,double in_lo,double in_hi,double out_lo,double out_hi){if(in_hi==in_lo)return out_lo;return (v-in_lo)/(in_hi-in_lo)*(out_hi-out_lo)+out_lo;}"#);
         self.line(r#"static int64_t median3(int64_t a,int64_t b,int64_t c){int64_t t;if(a>b){t=a;a=b;b=t;}if(b>c){t=b;b=c;c=t;}if(a>b){t=a;a=b;b=t;}return b;}"#);
         self.line(r#"static double rms_buf(const void*buf,int64_t len){if(len<=0)return 0.0;const int16_t*s=(const int16_t*)buf;double sum=0.0;for(int64_t i=0;i<len;i++){double v=(double)s[i];sum+=v*v;}return sqrt(sum/(double)len);}"#);
-        self.line(r#"static double lpf_alpha(double cutoff_hz,double sample_rate_hz){double rc=1.0/(6.28318530717958647692*cutoff_hz);double dt=1.0/sample_rate_hz;return dt/(rc+dt);}"#);
+        self.line(r#"static double lpf_alpha(double cutoff_hz,double sample_rate_hz){if(cutoff_hz<=0.0){fprintf(stderr,"volta runtime error: lpf_alpha cutoff_hz must be > 0\n");exit(1);}if(sample_rate_hz<=0.0){fprintf(stderr,"volta runtime error: lpf_alpha sample_rate_hz must be > 0\n");exit(1);}if(cutoff_hz>=sample_rate_hz/2.0){fprintf(stderr,"volta runtime error: lpf_alpha cutoff_hz (%f) must be below Nyquist limit (sample_rate/2 = %f)\n",cutoff_hz,sample_rate_hz/2.0);exit(1);}double rc=1.0/(6.28318530717958647692*cutoff_hz);double dt=1.0/sample_rate_hz;return dt/(rc+dt);}"#);
         // Ring buffer — power-of-two capacity, integer samples, overwrites oldest on overflow
         self.line(r#"typedef struct{int64_t*data;int64_t cap;int64_t head;int64_t tail;int64_t len;}VRing;"#);
         self.line(r#"static VRing ring_new(int64_t cap){VRing r;r.data=(int64_t*)malloc((size_t)cap*sizeof(int64_t));r.cap=cap;r.head=0;r.tail=0;r.len=0;return r;}"#);
@@ -1509,6 +1511,8 @@ impl Emitter {
                         format!("(strcmp({}, {}) == 0)", l, r),
                     BinOp::NotEq if l_is_str || r_is_str =>
                         format!("(strcmp({}, {}) != 0)", l, r),
+                    BinOp::Div => format!("_vdiv({}, {})", l, r),
+                    BinOp::Mod => format!("_vmod({}, {})", l, r),
                     _             => format!("({} {} {})", l, binop_sym(op), r),
                 }
             }

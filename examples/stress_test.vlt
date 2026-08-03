@@ -1,0 +1,48 @@
+import "fixed"
+import "filters"
+
+print("Stress Test — Edge Cases")
+print("=========================")
+print("")
+
+-- Fixed-point: division by zero
+print("-- fixed-point edge cases --")
+let a = fx_from_int(10)
+print("fx_div(a, 0): (skipped -- correctly triggers runtime error, verified separately)")
+
+print("")
+print("fx_from_int(0):")
+print(fx_to_str(fx_from_int(0)))
+
+print("")
+print("negative fixed-point:")
+let neg = fx_from_int(-5)
+print(fx_to_str(neg))
+print("fx_abs(neg): " .. fx_to_str(fx_abs(neg)))
+
+print("")
+print("-- ring buffer edge cases --")
+let empty_ring: VRing = ring_new(5)
+print("moving_average on empty ring:")
+print(int_to_str(moving_average(empty_ring)))
+
+print("median_filter3 on empty ring:")
+print(int_to_str(median_filter3(empty_ring)))
+
+print("")
+print("ring with only 1 sample:")
+ring_push(empty_ring, 42)
+print("moving_average: " .. int_to_str(moving_average(empty_ring)))
+print("median_filter3: " .. int_to_str(median_filter3(empty_ring)))
+
+print("")
+print("-- lowpass filter edge cases --")
+print("cutoff_hz = 0:")
+print(float_to_str(lowpass_filter(0.0, 100.0, 0.0, 1000.0)))
+
+print("")
+print("cutoff_hz higher than sample_rate/2 (nyquist violation):")
+print(float_to_str(lowpass_filter(0.0, 100.0, 2000.0, 1000.0)))
+
+print("")
+print("Done -- check above for crashes, NaN, or wildly wrong values")
