@@ -2,16 +2,16 @@
 --
 -- Q16.16 format: 16 bits whole, 16 bits fraction, stored in an i64.
 -- Uses only integer add/sub/mul/div/shift -- no FPU required.
--- Note: 65536 (1<<16) and shift-by-16 are inlined directly rather than
--- module-level constants, due to a current cross-module const/let
--- visibility gap in the import system.
+
+const FX_SHIFT: i64 = 16
+const FX_ONE:   i64 = 65536
 
 fn fx_from_int(n: i64) -> i64
-  return n * 65536
+  return n * FX_ONE
 end
 
 fn fx_to_int(fx: i64) -> i64
-  return fx / 65536
+  return fx / FX_ONE
 end
 
 fn fx_from_float(f: f64) -> i64
@@ -31,11 +31,11 @@ fn fx_sub(a: i64, b: i64) -> i64
 end
 
 fn fx_mul(a: i64, b: i64) -> i64
-  return (a * b) >> 16
+  return (a * b) >> FX_SHIFT
 end
 
 fn fx_div(a: i64, b: i64) -> i64
-  return (a << 16) / b
+  return (a << FX_SHIFT) / b
 end
 
 fn fx_abs(a: i64) -> i64
@@ -59,7 +59,7 @@ fn fx_to_str(fx: i64) -> str
   let whole = fx_to_int(fx)
   let frac_fx = fx_sub(fx, fx_from_int(whole))
   let frac_abs = fx_abs(frac_fx)
-  let frac_scaled = (frac_abs * 100000) / 65536
+  let frac_scaled = (frac_abs * 100000) / FX_ONE
   let frac_str = int_to_str(frac_scaled)
   while str_len(frac_str) < 5 do
     frac_str = "0" .. frac_str
