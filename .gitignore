@@ -19,3 +19,4 @@ fix_pg.py
 auth_server
 examples/bin_triage
 examples/fixed_test
+examples/bin_triage
