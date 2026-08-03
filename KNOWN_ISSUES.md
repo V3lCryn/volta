@@ -105,3 +105,57 @@ directly inside each function body rather than referencing a shared
 module-level constant, with a comment at the top of the file noting why.
 
 ---
+
+## Silent crashes and silently-wrong results on invalid arithmetic -- fixed
+
+**Found:** during a deliberate stress-testing session targeting edge
+cases in lib/fixed.vlt and lib/filters.vlt.
+
+**Symptom 1:** integer division or modulo by zero (e.g. `fx_div(a, 0)`,
+or any plain `/`/`%` in user code) caused an immediate, silent process
+crash with no error message -- a hardware-level SIGFPE, completely
+opaque to whoever was running the program.
+
+**Symptom 2:** `lpf_alpha(cutoff_hz, sample_rate)` with `cutoff_hz = 0`
+silently returned `0.0` -- not because that's a correct answer, but
+because the internal formula divides by `cutoff_hz`, producing a
+floating-point `inf` that arithmetic then quietly resolved back down to
+something plausible-looking. Separately, calling it with a cutoff at or
+above the Nyquist limit (half the sample rate) -- a physically
+meaningless request -- silently returned a plausible-looking number
+instead of flagging that the request itself doesn't make sense.
+
+**Why this matters, specifically for the mission:** in a real embedded
+or bionic control loop, a momentary sensor glitch producing a zero
+value, or a misconfigured cutoff/sample-rate pair, are both entirely
+plausible real-world events -- not exotic edge cases. Before this fix,
+either would have caused a silent crash or a silently wrong answer,
+exactly the failure modes that are least acceptable in a device meant
+to touch a real person.
+
+**Fix:**
+- Added `_vdiv`/`_vmod` runtime helpers that check for a zero divisor
+  and print a clear `volta runtime error: division by zero` /
+  `modulo by zero` message before exiting, instead of an opaque crash.
+  All emitted `/` and `%` now route through these.
+- Added explicit validation inside `lpf_alpha`: cutoff_hz and
+  sample_rate_hz must both be positive, and cutoff_hz must be below
+  the Nyquist limit (sample_rate/2) -- each violation now produces a
+  specific, informative error message naming the actual values involved.
+
+**Verified:** all existing tests (fixed_test.vlt, anthem_bionics.vlt)
+produce byte-identical output to before the fix for every legitimate
+input -- zero regressions. The new checks only trigger on genuinely
+invalid input.
+
+**Status:** FIXED.
+
+**Note on design philosophy:** this is Option 3 from a three-option
+analysis (silent fallback value / proper Result-based fallible
+arithmetic / honest crash with a clear message). A proper Result-based
+approach to fallible arithmetic, consistent with Volta's existing
+Result/Ok/Err system, remains a legitimate longer-term improvement --
+this fix trades some of that elegance for being small, safe, and
+immediately deliverable without a larger design commitment.
+
+---
