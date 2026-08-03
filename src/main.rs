@@ -289,6 +289,7 @@ fn collect_stmts(
                 | ast::Stmt::EnumDef(_)
                 | ast::Stmt::ExternBlock(_)
                 | ast::Stmt::DeviceBlock(_)
+                | ast::Stmt::Const { .. }
                 | ast::Stmt::TypeAlias { .. } => { all_stmts.push(stmt); }
                 _ => {}
             }

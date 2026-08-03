@@ -1,0 +1,7 @@
+import "mathconst"
+
+print("Testing module-level const import")
+print("==================================")
+print("")
+print("via function call: " .. int_to_str(get_the_number()))
+print("directly by name:  " .. int_to_str(GREETING_NUMBER))

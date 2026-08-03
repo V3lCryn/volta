@@ -1,0 +1,7 @@
+-- lib/mathconst.vlt -- tests that module-level const values cross imports
+
+const GREETING_NUMBER: i64 = 42
+
+fn get_the_number() -> i64
+  return GREETING_NUMBER
+end
